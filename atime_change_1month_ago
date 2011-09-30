@@ -1,0 +1,18 @@
+#!/bin/bash
+
+# portable function for changing access time of a file
+# (or mtime: switch the -a to -m)
+
+atime_change_1month_ago()
+{
+  if [[ -e $1 ]]; then
+    month=`date +%m`
+    [ `echo $month|cut -c1` -eq 0 ] && month=`echo $month|cut -c2`
+    month=$((month - 1))
+    [ `expr length $month` -eq 1 ] && month="0$month"
+    DayHrMin=`date +%d%H%M`
+    touch -a -t ${month}${DayHrMin} "$1"
+  else
+    echo "$1: No such file or directory"
+  fi
+}
