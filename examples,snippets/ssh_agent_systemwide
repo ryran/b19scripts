@@ -1,0 +1,26 @@
+#!/bin/bash
+# Currently, I only have used this on RH/Fedora-based systems, so....
+# The way *I* use this: I put the function into /etc/profile.d/reusessh.sh
+# or something like that, and then call it from each user's ~/.bash_profile
+
+# Reuse SSH Agent -- handles a per-user system-wide reusable ssh-agent
+# This just sets up a function; you still need to call it from ~/.bash_profile
+# (or simply run on demand, as a replacement for running 'ssh-agent bash')
+function ssh_agent_systemwide
+{
+  # This block checks for already running ssh-agent
+  local SSH_AGENT_CACHE=/tmp/ssh_agent_`whoami`
+  if [[ -f $SSH_AGENT_CACHE ]]; then
+    eval `cat $SSH_AGENT_CACHE` &>/dev/null
+    kill -0 $SSH_AGENT_PID &>/dev/null && echo "[Reusing existing ssh-agent]" \
+      || { local dead=1; rm -f $SSH_AGENT_CACHE; }
+  fi
+
+  # This block starts a new ssh-agent if necessary
+  if [[ ! -f $SSH_AGENT_CACHE ]]; then
+    [[ $dead = 1 ]] && echo "[Started new ssh-agent]"
+    ssh-agent >$SSH_AGENT_CACHE
+    chmod 400 $SSH_AGENT_CACHE
+    eval `cat $SSH_AGENT_CACHE` &>/dev/null
+  fi
+}
