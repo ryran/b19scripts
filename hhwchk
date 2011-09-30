@@ -1,6 +1,6 @@
 #!/bin/bash
-# host-hwcheck v1.99c last mod 2010/7/30
-# by Ryan Sawhill ryan@open-pros.com
+# hhwchk v2.06-02 last mod 2011/9/03
+# by Ryan Sawhill ryan@b19.org
 #-------------------------------------------------------------------------------
 #    Copyright 2010 Ryan Sawhill
 #
@@ -17,91 +17,194 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #-------------------------------------------------------------------------------
-# Hops into systems to check out what they have in the way of
-#   RAM, CPUs, disks, NICs, and video cards.
-# Simple, right?
+# Hops into systems via ssh to check out what they have in the way of hardware.
+#
+# When I started this script with the name host-hwcheck, I began with a simple
+# purpose: I wanted to be able to quickly gather information about a bunch of
+# systems that I had been handed root access to -- specifically in a classroom
+# environment where it was important that the students' systems be relatively
+# uniform. Since my first days with linux I've been pretty handy with bash and
+# so it never was much work to use for-loops along with ssh, but you know what
+# they say about things that you have to do more than once, let alone every
+# single week...
+# So the initial goal was to display info on number of processors and their
+# capabilities, plus amount of ram and disk space and I wanted to be able to
+# do this on remote systems without requiring the script to reside on those
+# systems as well.
+# Right from the start I also wanted to be able to use number generation ('seq'
+# or '{n..n}') for hostnames, along with some other configurable prefix like
+# 'station' -- I don't know of a quick and elegant way to do this with bash
+# trickery, so that was also part of it.
+#
+# Over the course of a month and a half, it evolved and vastly improved, with a
+# small sacrifice in efficiency. This also prompted my first bit of self-study
+# into awk, which I had only ever used for simply pulling out a column in text.
+# I'm definitely still learning on that front -- you'll see me resort to piping
+# almost-baked awk-output into sed or other commands because I haven't figured
+# out all the wonders of this new and complicated (*ahem* .. to me) language.
+# Hopefully this will continue to evolve in efficiency as my knowledge expands,
+# but to move that process along quicker, send any ideas for ways to improve
+# things to me at <ryan@b19.org>. I've been meaning to get into python as well
+# actually, so if you're looking at this mess and thinking "WOW this would be so
+# much better in XYZ LANGUAGE", hit me up and let me know.
+# As the help page says, latest version can be found at <http://b19.org/linux>.
+#
+# Notes:
+# This script doesn't use absolute paths for cmd names; however there is some
+# error-checking to account for the following commands being missing:
+#   dmidecode, ethtool
+# There is no error-checking for anything else, so standard coreutils and the
+# util-linux-ng commands must be available via $PATH, plus the following:
+#   gawk, xargs, sed, lspci
 #-------------------------------------------------------------------------------
 
-zero=`basename $0`
+zero=$(basename $0)
+version=$(head -n2 $0 | grep -o "$zero v.*")
+
 # GNU getopt short and long options:
-sopts='vp:s:'
-lopts='verbose,prefix:,suffix:'
+sopts='P:S:LNbcdeghnrv'
+lopts='prefix:,suffix:,localhost,nocolor,bios,cpu,disks,ethtool,graphics,hostname,net,ram,verbose'
 
 USAGE()
-{ echo "Usage: $zero [-v] [-p PREFIX] [-s SUFFIX] HOST..."; }
+{
+echo "Usage: $zero [-Nbcdeghnr|-Nv] SSH_HOST...|--localhost"
+echo "  or:  $zero -?|--help"
+}
 
 XHELP()
 {
 USAGE
-echo "Use ssh & standard tools to list hardware (cpu, ram, disk, etc) on HOST
+echo "Use proc & standard tools to report hw info on localhost or ssh hosts
 
-Options:"
+Host-selection options:"
 echo "
- -v, --verbose@show as much info as possible
- -p, --prefix=PREFIX@where PREFIX is text to be prepended to HOST
- -s, --suffix=SUFFIX@where SUFFIX is to be appended to HOST"|
+ -P, --prefix=PREFIX@where PREFIX is text to be prepended to SSH_HOST
+ -S, --suffix=SUFFIX@where SUFFIX is text to be appended to SSH_HOST
+ -L, --localhost@operate on localhost instead of SSH_HOST via ssh" |
+column -s@ -t
+
+echo "
+Display options:"
+echo "
+ -N, --nocolor@disable coloring of output
+ -b, --bios@use dmidecode to query the bios for extra info
+ -c, --cpu@show info on detected cpus
+ -d, --disks@show info on block devices
+ -e, --ethtool@use ethtool to show link speed of nics
+ -g, --graphics@show info on vga adapters, via lspci
+ -h, --hostname@show output of 'uname -rn' command
+ -n, --net@show info on wifi/ethernet devices, via lspci
+ -r, --ram@show info on ram
+ -v, --verbose@show as much information as possible" |
 column -s@ -t
 echo "
 Examples:
-  $zero dev.b19.org prod.b19.org web.b19.org
-  $zero dev prod web --suffix=.b19.org
-  $zero station5 station6 station7
-  $zero -p station 5 6 7
-  $zero -vp station -s .example.com 5 6 7"
+  $zero --localhost
+  $zero -Lv
+  $zero --cpu dev.b19.org prod.b19.org web.b19.org
+  $zero -c dev prod web --suffix=.b19.org
+  $zero --ram --bios station5 station6 station7
+  $zero -rb --prefix station 5 6 7
+  $zero -P root@station -S .example.com -v 5 6 7
+
+Version info: $version
+Report bugs or suggestions to <ryan@b19.org>
+See <http://b19.org/linux> for the latest version"
 exit
 }
 
 # check for help query
-[ $# -eq 0 ] && XHELP
-case ${1##*-} in
-  help|h|\?) XHELP
+[ $# -eq 0 ] && { USAGE; echo "{$version}"; exit; }
+case $1 in
+  --help|-\?) XHELP
 esac
 
 # check for bad switches
 getopt -Q --name=$zero -o $sopts -l $lopts -- $* || { USAGE; exit 1; }
 
-# pass cmdline args on to parsing function
+#-------------------------------------------------------------------------------
+# parse command-line arguments
 PARSE()
 {
-unset verbose pre suf
+opts=n
+unset pre suf localhost bios cpu disks ethtool graphics hostname net ram verbose
 until [[ $1 = -- ]]; do
   case $1 in
+    -P|--prefix)    pre=$2; shift 2
+  ;;
+    -S|--suffix)    suf=$2; shift 2
+  ;;
+    -L|--localhost) localhost=y; shift
+  ;;
+    -N|--nocolor)   nocolor=y; shift
+  ;;
+    -b|--bios)      bios=y; shift
+                    opts=y
+  ;;
+    -c|--cpu)       cpu=y; shift
+                    opts=y
+  ;;
+    -d|--disks)     disks=y; shift
+                    opts=y
+  ;;
+    -e|--ethtool)   ethtool=y; shift
+                    opts=y
+  ;;
+    -g|--graphics)  graphics=y; shift
+                    opts=y
+  ;;
+    -h|--hostname)  hostname=y; shift
+                    opts=y
+  ;;
+    -n|--net)       net=y; shift
+                    opts=y
+  ;;
+    -r|--ram)       ram=y; shift
+                    opts=y
+  ;;
     -v|--verbose)   verbose=y; shift
-  ;;
-    -p|--prefix)    pre=$2; shift 2
-  ;;
-    -s|--suffix)    suf=$2; shift 2
+                    opts=y
   esac
 done
-shift
-[ $# -eq 0 ] && { echo "$zero: which hosts to check?"; USAGE; exit 1; }
-hosts=$*
+shift #(to get rid of the '--')
+# check for missing HOST
+if [[ $# -eq 0 && $localhost != y ]]; then
+  echo -e "$zero: which hosts to check? (use '-L' for localhost)\n"
+  USAGE
+  exit 5
+else
+  hosts=$*
+fi
 }
 
 PARSE $(getopt -u --name=$zero -o $sopts -l $lopts -- $*)
 
-# run our verbose version of the script if -v was used
-echo "[ operating on $pre{`echo $hosts|sed 's/ /,/g'`}$suf ]"
+#-------------------------------------------------------------------------------
+# time to set up which commands to run
+cmdscript=$(mktemp /tmp/$zero.XXX)
+trap "rm $cmdscript" EXIT
 
-if [[ $verbose = y ]]; then
-
-  for HOST in $hosts; do
-
-    echo "------------------------------------------------<$pre$HOST$suf>"
-
-    ssh ${pre}${HOST}${suf} '
-
+[[ $bios = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
 if `which dmidecode` &>/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
   dmi=yes
   BIOS_phys_num_cpu="[bios: phys_cpus=$(dmidecode -s processor-family | wc -l), "
-  BIOS_cpu_cores=$(dmidecode -t processor | awk "/Core Count/{totalcores+=\$3;percpucores=\$3}END{print \"num_cores=\"totalcores\", cores_per_cpu=\"percpucores\"]\"}")
+  BIOS_cpu_cores=$(dmidecode -t processor | awk '/Core Count/{totalcores+=$3;percpucores=$3}END{print "cores/cpu="percpucores", total_cores="totalcores"]"}')
   BIOS_model_cpu=$(echo "[`dmidecode -s processor-manufacturer|sort -u` `dmidecode -s processor-family|sort -u` @ `dmidecode -s processor-frequency|sort -u` <--says bios]")
-  BIOS_ram=$(dmidecode -t memory|awk "/Size: [[:digit:]]/{numdims+=1;ram=\$2;sumram+=ram}END{print \"[\"numdims\" DIMMs, \"sumram\" MB actual]\"}")
+  BIOS_ram=$(dmidecode -t memory|awk '/^[[:space:]]Size: [[:digit:]]/{numdims+=1;ram=$2;sumram+=ram}END{print "["numdims" DIMMs, "sumram" MB actual]"}')
 else
   unset dmi
 fi
+EOF
 
-model_cpu=$(awk -F: "/model name/{print\$2}" /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
+[[ $hostname = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
+                 echo "HOST: $(uname -nr)"
+EOF
+
+[[ $cpu = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
+model_cpu=$(awk -F: '/model name/{print$2}' /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
 num_cpu=$(grep processor /proc/cpuinfo | sort -u | wc -l)
 num_cpu_phys=$(grep "physical id" /proc/cpuinfo | sort -u | wc -l)
 [[ $num_cpu_phys -eq 0 ]] && num_cpu_phys=$num_cpu
@@ -109,40 +212,56 @@ if [[ $num_cpu_phys -ne $num_cpu ]]; then
   num_cores_per_cpu=$(grep cores /proc/cpuinfo|head -n1|awk {print\$4})
   [[ -n $num_cores_per_cpu ]] && cores=", ${num_cores_per_cpu} cores/ea"
 fi
-cpu_flags=$(egrep -o pae\|lm\|vmx\|svm /proc/cpuinfo|sort -u|xargs echo|sed s/\ /,/g)
-
-ram=$(free -m | awk /^Mem:/{print\$2})
-#hdds=$(fdisk -l 2>/dev/null| awk -F, "/^Disk \/dev\/[vsh]d./{print\$1}" | sed "s@Disk /dev/@  @")
-hdds=$(fdisk -l 2>/dev/null | awk "/^Disk \/dev\/[vsh]d./{d++;bytes+=\$5;disk[\$2]=\$3\$4} END {printf \"DISKS: \"; gb=bytes/1024/1024/1024; printf gb\"GB total, \"d\" disks\n\";for (i in disk) print i,disk[i]}" | sed -e "s@/dev/@  @" -e "s/,$//" -e "s/://" -e "s/DISKS/DISKS:/" -e "s/GB/ GB/")
-lspcioutput=$(lspci)
-net=$(echo "$lspcioutput" | grep -e Net -e Eth | cut -d: -f3 | sed -e "s/ (rev.*//" -e "s/^/ /")
-vga=$(echo "$lspcioutput" | awk -F: /VGA/{print\$3} | sed -e "s/ (rev.*//" -e "s/^/ /")
-
-                 echo "HOSTNAME: $(hostname)"
+cpu_flags=$(egrep -o "pae|lm|vmx|svm" /proc/cpuinfo|sort -u|xargs echo|sed "s/ /,/g")
                  echo "CPU: ${num_cpu} logical cpus; flags=${cpu_flags}"
                  echo "  ${num_cpu_phys}${model_cpu}${cores}"
-[[ -n $dmi ]] && echo "  ${BIOS_model_cpu}"
-#[[ -n $dmi ]] && echo "  ${BIOS_phys_num_cpu}${BIOS_cpu_cores}"
-                 echo "RAM: ${ram} MB"
-[[ -n $dmi ]] && echo "  ${BIOS_ram}"
-                 echo "${hdds}"
-                 echo -e "NET:\n${net}"
-                 echo -e "VGA:\n${vga}"
-                 echo
-'
-  done
-else
-# if no -v, let's do the quick version
-  for HOST in $hosts; do
+                 [[ -n $dmi ]] && echo "  ${BIOS_model_cpu}"
+                 [[ -n $dmi ]] && echo "  ${BIOS_phys_num_cpu}${BIOS_cpu_cores}"
 
-    echo "------------------------------------------------<$pre$HOST$suf>"
+EOF
 
-    ssh ${pre}${HOST}${suf} '
+[[ $ram = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
+sum_ram=$(free -m | awk /^Mem:/{print\$2})
+                 echo "RAM: ${sum_ram} MB"
+                 [[ -n $dmi ]] && echo "  ${BIOS_ram}"
+EOF
+
+[[ $disks = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
+hdds=$(fdisk -l 2>/dev/null | awk '/^Disk.*[vsh]d.|^Disk.*xvd./ {NUMDISKS++; BYTES+=$5; DISK[$2]=$3" "$4} END {GBYTES=BYTES/1024/1024/1024; printf GBYTES" GB total, "NUMDISKS" disks\n"; for (i in DISK) print i,DISK[i]}' | sed -e "s@/dev/@  @" -e "s/,$//" -e "s/://")
+                 echo "DISKS: ${hdds}"
+EOF
+
+[[ $net = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
+lspci_netdevs=$(lspci | awk -F: '/Net|Eth/{print$3}' | sed -e "s/ (rev.*//" -e "s/^/ /")
+                 echo -e "NET:\n${lspci_netdevs}"
+EOF
+
+[[ $ethtool = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
+if which ethtool &>/dev/null; then
+  ethdevs=$(ifconfig | awk '/^peth|^eth|^em/{print$1}' | grep -v :)
+  ethtool_linkinfo=$(for i in $ethdevs;do echo -e "  $i\tlink=$(ethtool $i|awk '/Link detected:/{print$3}')$(spd=$(ethtool $i|awk '/Speed: 1/{print$2}');[[ -n $spd && $spd != Unknown! ]] && echo ", speed=$spd")";done)
+                 echo "${ethtool_linkinfo}"
+fi
+EOF
+
+[[ $graphics = y || $verbose = y ]] &&
+cat >> $cmdscript <<\EOF
+lspci_vga=$(lspci | awk -F: /VGA/{print\$3} | sed -e "s/ (rev.*//" -e "s/^/ /")
+                 echo -e "VGA:\n${lspci_vga}"
+EOF
+
+# what to do if no other display options are used
+[[ $opts = n ]] &&
+cat > $cmdscript <<\EOF
 if `which dmidecode` &>/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
-  BIOS_ram=$(dmidecode -t memory|awk "/Size: [[:digit:]]/{numdims+=1;ram=\$2;sumram+=ram}END{print \"(\"sumram\" MB actual)\"}")
+  BIOS_ram=$(dmidecode -t memory|awk '/Size: [[:digit:]]/{numdims+=1;ram=$2;sumram+=ram}END{print "("sumram" MB actual)"}')
 fi
 
-model_cpu=$(awk -F: "/model name/{print\$2}" /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
+model_cpu=$(awk -F: '/model name/{print$2}' /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
 num_cpu=$(grep processor /proc/cpuinfo | sort -u | wc -l)
 num_cpu_phys=$(grep "physical id" /proc/cpuinfo | sort -u | wc -l)
 [[ $num_cpu_phys -eq 0 ]] && num_cpu_phys=$num_cpu
@@ -152,15 +271,34 @@ if [[ $num_cpu_phys -ne $num_cpu ]]; then
 fi
 cpu_flags=$(egrep -o pae\|lm\|vmx\|svm /proc/cpuinfo|sort -u|xargs echo|sed s/\ /,/g)
 
-ram=$(free -m | awk /^Mem:/{print\$2})
-#hdds=$(fdisk -l 2>/dev/null|awk -F, "/^Disk \/dev\/[vsh]d./{print\$1}"|sed s/Disk/HDD/)
-hdds=$(fdisk -l 2>/dev/null| awk -F, "/^Disk \/dev\/[vsh]d./{print\$1}" | sed -e "s@/dev/@@" -e "s/Disk/DISK/")
+sum_ram=$(free -m | awk /^Mem:/{print\$2})
+hdds=$(fdisk -l 2>/dev/null| awk -F, '/^Disk.*[vsh]d.|^Disk.*xvd./{print$1}' | sed -e "s@/dev/@@" -e "s/Disk/DISK/")
 
-echo "${num_cpu_phys}${model_cpu}${cores}"
-echo "  (${num_cpu} logical cpus; flags=${cpu_flags})"
-echo "RAM: ${ram} MB ${BIOS_ram}"
-echo "${hdds}"
-echo
-      '
+                 echo "${num_cpu_phys}${model_cpu}${cores}"
+                 echo "  (${num_cpu} logical cpus; flags=${cpu_flags})"
+                 echo "RAM: ${sum_ram} MB ${BIOS_ram}"
+                 echo "${hdds}"
+EOF
+
+#-------------------------------------------------------------------------------
+# finally, we run our script either on localhost or remotely over ssh
+
+# I like color; please, sue me
+black='\E[00;30m'; red='\E[00;31m'; green='\E[00;32m'; orange='\E[00;33m'
+blue='\E[00;34m'; cyan='\E[00;36m'; magenta='\E[00;37m'
+c_sep=$cyan
+c_h=$green
+c_text=$orange
+
+[[ $nocolor = y ]] && unset c_sep c_h c_text black
+
+if [[ $localhost = y ]]; then
+  bash $cmdscript
+else
+  echo -e "${c_sep}  operating on: ${c_h}$pre{`echo $hosts|sed 's/ /,/g'`}$suf"
+  for HOST in $hosts; do
+    echo -e "${c_sep}------------------------------------------------{${c_h}$pre$HOST$suf${c_text}"
+    ssh ${pre}${HOST}${suf} "$(cat $cmdscript)"
   done
 fi
+echo -en "$black"
