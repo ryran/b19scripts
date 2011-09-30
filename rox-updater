@@ -1,0 +1,118 @@
+#!/bin/bash
+# rox-updater v0.05 last mod 2010/8/12
+# by Ryan Sawhill ryan@b19.org
+#-------------------------------------------------------------------------------
+#    Copyright 2010 Ryan Sawhill
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#-------------------------------------------------------------------------------
+#
+# ! ! ! THIS WILL NOT WORK IF YOU FAIL TO EDIT THE FOLLOWING LINE PROPERLY ! ! !
+#
+myUUID="499D-B326"
+# set to the universally unique id of the filesystem on your DAP (find w/blkid)
+# Still stumped? Run blkid. Figure out which line in the output refers to your
+# ipod/DAP and copy the part that says: UUID="xxxxxxxxxxxx"
+# Then remove the UUID="499D-B326" part above, pasting in your replacement.
+# Don't have blkid? Make sure your DAP is mounted up somewhere, and then run the
+# mount command and find your DAP in the output. Then do an ls -l on
+# /dev/disk/by-uuid and look for the symlink that is pointing to your DAP's dev
+# node (e.g., ../../sdc2). Hopefully it's clear by now, but THAT symlink's name
+# is your UUID.
+#
+# REQUIREMENTS:
+# a modern kernel with /dev/disk/by-uuid support;
+# a system with core utils including 'unzip'
+# BASH with all its wonderful builtins;
+# root access (I don't use sudo, so if UDU, you'll need to change a few things);
+# you setting the UUID variable yourself (see above myUUID line)
+#
+# GEEKY TECH NOTES:
+# Written for me and my ipod 5g, but you're welcome to use it for whatever.
+# Just needs a few tweaks to work on !ipods. (Search for "ipod" and you'll see.)
+# I originally had this looking for an already mounted DAP both automatically,
+# or via cmdline args... but decided to KISS and just mount it up myself
+# temporarily, whether it's already mounted or not.
+#
+# RE IPODPATCHER, QUICKBOOT
+# If you want faster ipod booting, read
+#  http://forums.rockbox.org/index.php?topic=21643.msg150087#msg150087
+# If you're still interested, make sure to download ipodpatcher @
+#  http://www.rockbox.org/wiki/IpodPatcher
+# and put it somewhere in root's $PATH. Then save a backup of OSOS, and well...
+# you're good to go. This script will update the copy of rockbox.ipod in OSOS
+# everytime you successfully run it. If the above few lines or links are
+# confusing, just know that if you haven't downloaded ipodpatcher and dropped
+# it into root's $PATH anytime recently, you'll be fine.
+#-------------------------------------------------------------------------------
+
+DAP=ipod # make it easier for friendly error messages
+zero=$(basename $0)
+
+# check for running as root  
+[ `id -u` -ne 0 ] && { echo -e "must run as root!\n"; exit 2; }
+
+USAGE()
+{
+  [[ $1 = Msg ]] && echo $2
+  echo "Usage: $zero PATH_TO_ROCKBOX.ZIP"
+  echo "Configured to look for $DAP w/UUID of $myUUID"
+  exit $([[ $1 = Msg ]] && echo $3)
+}
+
+# check cmdline args
+[ $# -ne 1 ] && USAGE
+case ${1##*-} in
+  help|h|\?) USAGE
+esac
+
+# set a var called rbzip to whatever the 1st command-line arg is
+rbzip=$1
+
+# if can't find a disk with our uuid, quit
+if [ ! -L /dev/disk/by-uuid/$myUUID ]; then
+  USAGE Msg "couldn't find $DAP with a UUID of $myUUID!" 5
+fi
+
+# if $rbzip isn't a zip file, quit
+if ! file "$rbzip" | grep -q "Zip archive data"; then
+  USAGE Msg "can't find rb build zip file $rbzip!" 10
+# if $rbzip doesn't contain .rockbox, quit
+elif ! unzip -l "$rbzip" | grep -q .rockbox; then
+  USAGE Msg "$rbzip is a zip file but doesn't appear to contain a rockbox build!" 11
+fi
+
+# come up with randomly-named dir for temporary mountpoint
+mnt=$(mktemp -d /tmp/$zero.XXX)
+trap "{ umount -v $mnt; rm -rv $mnt; }" EXIT
+
+# mount ipod on tmpdir, check for errors
+if ! mount -v /dev/disk/by-uuid/$myUUID $mnt; then
+  echo -e "ERROR mounting $DAP!\n"
+  exit 30
+# this error could happen if cwd has chattr +i or if DAP's FS is screwed
+fi  
+
+echo -n "Passed all checks... unzipping archive in 6s"
+s=6; until [ $s -eq 0 ]; do echo -n "."; sleep 1; s=$((s-1)); done
+echo
+
+# finally unzip the build
+unzip -o $rbzip -d $mnt
+
+# the following 3-line if-statement writes out the new rockbox.ipod to OSOS
+# IF we can find the ipodpatcher executable
+if which ipodpatcher &>/dev/null; then
+  ipodpatcher -wf $mnt/.rockbox/rockbox.ipod && rm -v $mnt/.rockbox/rockbox.ipod
+fi
