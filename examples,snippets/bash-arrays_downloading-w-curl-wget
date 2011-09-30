@@ -1,0 +1,41 @@
+#!/bin/bash
+# The uncommented code here was from a larger script that I used to create a
+# virtual machine for compiling and building rockbox... I've taken it out and
+# commented it up to give an example of using bash arrays and to show the
+# differences between wget & curl.
+
+# create an array
+p=(hotkey-filetree-insert_last.patch hotkey-filetree-selectonly_ipod.patch no-recording_5G.patch)
+# notice the parentheses instead of say, quotation marks
+
+# bash array variables can't be used like normal variables
+# ie, you're not going to do `echo ${p}` .. it won't get you all of them
+# you have to specifiy which variable in the array you want
+
+echo "Don't forget to download patches from b19.org/rockbox"
+for i in ${p[*]}; do echo "  $i"; done
+# notice the [] inside the variable ${} definition
+# we can use a [*] to print out all items in the array
+# or a number, e.g. ${variable[0]} to get the first in an array
+
+if which curl &>/dev/null || which wget &>/dev/null; then
+  read -p "Download them for you now? ENTER to continue; Ctrl-c to exit "
+else
+  exit
+fi
+
+# here we're checking for wget, and if we have it, we're downloading all three
+# files with one wget command thanks to bash's csh-style curly-brace expansion
+which wget &>/dev/null \
+  && wget http://b19.org/rockbox/{${p[0]},${p[1]},${p[2]}} \
+    && exit
+# wget automatically saves files with their appropriate name, so we're done
+
+# curl is so featureful, but.. sometimes it seems too complicated
+curl http://b19.org/rockbox/\{${p[0]},${p[1]},${p[2]}\} -o '#1'
+# we're letting bash expand the 3 variables in the array, but that's all bash
+# does here--notice the backslashes. in this case, we prevent bash from
+# expanding the {patch0,patch1,patch2} statement, because curl needs to read
+# that itself in order to be able to properly set the output filename with
+# '-o #1' ... kinda silly huh?
+
