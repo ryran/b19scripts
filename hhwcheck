@@ -1,0 +1,166 @@
+#!/bin/bash
+# host-hwcheck v1.99c last mod 2010/7/30
+# by Ryan Sawhill ryan@open-pros.com
+#-------------------------------------------------------------------------------
+#    Copyright 2010 Ryan Sawhill
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#-------------------------------------------------------------------------------
+# Hops into systems to check out what they have in the way of
+#   RAM, CPUs, disks, NICs, and video cards.
+# Simple, right?
+#-------------------------------------------------------------------------------
+
+zero=`basename $0`
+# GNU getopt short and long options:
+sopts='vp:s:'
+lopts='verbose,prefix:,suffix:'
+
+USAGE()
+{ echo "Usage: $zero [-v] [-p PREFIX] [-s SUFFIX] HOST..."; }
+
+XHELP()
+{
+USAGE
+echo "Use ssh & standard tools to list hardware (cpu, ram, disk, etc) on HOST
+
+Options:"
+echo "
+ -v, --verbose@show as much info as possible
+ -p, --prefix=PREFIX@where PREFIX is text to be prepended to HOST
+ -s, --suffix=SUFFIX@where SUFFIX is to be appended to HOST"|
+column -s@ -t
+echo "
+Examples:
+  $zero dev.b19.org prod.b19.org web.b19.org
+  $zero dev prod web --suffix=.b19.org
+  $zero station5 station6 station7
+  $zero -p station 5 6 7
+  $zero -vp station -s .example.com 5 6 7"
+exit
+}
+
+# check for help query
+[ $# -eq 0 ] && XHELP
+case ${1##*-} in
+  help|h|\?) XHELP
+esac
+
+# check for bad switches
+getopt -Q --name=$zero -o $sopts -l $lopts -- $* || { USAGE; exit 1; }
+
+# pass cmdline args on to parsing function
+PARSE()
+{
+unset verbose pre suf
+until [[ $1 = -- ]]; do
+  case $1 in
+    -v|--verbose)   verbose=y; shift
+  ;;
+    -p|--prefix)    pre=$2; shift 2
+  ;;
+    -s|--suffix)    suf=$2; shift 2
+  esac
+done
+shift
+[ $# -eq 0 ] && { echo "$zero: which hosts to check?"; USAGE; exit 1; }
+hosts=$*
+}
+
+PARSE $(getopt -u --name=$zero -o $sopts -l $lopts -- $*)
+
+# run our verbose version of the script if -v was used
+echo "[ operating on $pre{`echo $hosts|sed 's/ /,/g'`}$suf ]"
+
+if [[ $verbose = y ]]; then
+
+  for HOST in $hosts; do
+
+    echo "------------------------------------------------<$pre$HOST$suf>"
+
+    ssh ${pre}${HOST}${suf} '
+
+if `which dmidecode` &>/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
+  dmi=yes
+  BIOS_phys_num_cpu="[bios: phys_cpus=$(dmidecode -s processor-family | wc -l), "
+  BIOS_cpu_cores=$(dmidecode -t processor | awk "/Core Count/{totalcores+=\$3;percpucores=\$3}END{print \"num_cores=\"totalcores\", cores_per_cpu=\"percpucores\"]\"}")
+  BIOS_model_cpu=$(echo "[`dmidecode -s processor-manufacturer|sort -u` `dmidecode -s processor-family|sort -u` @ `dmidecode -s processor-frequency|sort -u` <--says bios]")
+  BIOS_ram=$(dmidecode -t memory|awk "/Size: [[:digit:]]/{numdims+=1;ram=\$2;sumram+=ram}END{print \"[\"numdims\" DIMMs, \"sumram\" MB actual]\"}")
+else
+  unset dmi
+fi
+
+model_cpu=$(awk -F: "/model name/{print\$2}" /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
+num_cpu=$(grep processor /proc/cpuinfo | sort -u | wc -l)
+num_cpu_phys=$(grep "physical id" /proc/cpuinfo | sort -u | wc -l)
+[[ $num_cpu_phys -eq 0 ]] && num_cpu_phys=$num_cpu
+if [[ $num_cpu_phys -ne $num_cpu ]]; then
+  num_cores_per_cpu=$(grep cores /proc/cpuinfo|head -n1|awk {print\$4})
+  [[ -n $num_cores_per_cpu ]] && cores=", ${num_cores_per_cpu} cores/ea"
+fi
+cpu_flags=$(egrep -o pae\|lm\|vmx\|svm /proc/cpuinfo|sort -u|xargs echo|sed s/\ /,/g)
+
+ram=$(free -m | awk /^Mem:/{print\$2})
+#hdds=$(fdisk -l 2>/dev/null| awk -F, "/^Disk \/dev\/[vsh]d./{print\$1}" | sed "s@Disk /dev/@  @")
+hdds=$(fdisk -l 2>/dev/null | awk "/^Disk \/dev\/[vsh]d./{d++;bytes+=\$5;disk[\$2]=\$3\$4} END {printf \"DISKS: \"; gb=bytes/1024/1024/1024; printf gb\"GB total, \"d\" disks\n\";for (i in disk) print i,disk[i]}" | sed -e "s@/dev/@  @" -e "s/,$//" -e "s/://" -e "s/DISKS/DISKS:/" -e "s/GB/ GB/")
+lspcioutput=$(lspci)
+net=$(echo "$lspcioutput" | grep -e Net -e Eth | cut -d: -f3 | sed -e "s/ (rev.*//" -e "s/^/ /")
+vga=$(echo "$lspcioutput" | awk -F: /VGA/{print\$3} | sed -e "s/ (rev.*//" -e "s/^/ /")
+
+                 echo "HOSTNAME: $(hostname)"
+                 echo "CPU: ${num_cpu} logical cpus; flags=${cpu_flags}"
+                 echo "  ${num_cpu_phys}${model_cpu}${cores}"
+[[ -n $dmi ]] && echo "  ${BIOS_model_cpu}"
+#[[ -n $dmi ]] && echo "  ${BIOS_phys_num_cpu}${BIOS_cpu_cores}"
+                 echo "RAM: ${ram} MB"
+[[ -n $dmi ]] && echo "  ${BIOS_ram}"
+                 echo "${hdds}"
+                 echo -e "NET:\n${net}"
+                 echo -e "VGA:\n${vga}"
+                 echo
+'
+  done
+else
+# if no -v, let's do the quick version
+  for HOST in $hosts; do
+
+    echo "------------------------------------------------<$pre$HOST$suf>"
+
+    ssh ${pre}${HOST}${suf} '
+if `which dmidecode` &>/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
+  BIOS_ram=$(dmidecode -t memory|awk "/Size: [[:digit:]]/{numdims+=1;ram=\$2;sumram+=ram}END{print \"(\"sumram\" MB actual)\"}")
+fi
+
+model_cpu=$(awk -F: "/model name/{print\$2}" /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
+num_cpu=$(grep processor /proc/cpuinfo | sort -u | wc -l)
+num_cpu_phys=$(grep "physical id" /proc/cpuinfo | sort -u | wc -l)
+[[ $num_cpu_phys -eq 0 ]] && num_cpu_phys=$num_cpu
+if [[ $num_cpu_phys -ne $num_cpu ]]; then
+  num_cores_per_cpu=$(grep cores /proc/cpuinfo|head -n1|awk {print\$4})
+  [[ -n $num_cores_per_cpu ]] && cores=", ${num_cores_per_cpu} cores/ea"
+fi
+cpu_flags=$(egrep -o pae\|lm\|vmx\|svm /proc/cpuinfo|sort -u|xargs echo|sed s/\ /,/g)
+
+ram=$(free -m | awk /^Mem:/{print\$2})
+#hdds=$(fdisk -l 2>/dev/null|awk -F, "/^Disk \/dev\/[vsh]d./{print\$1}"|sed s/Disk/HDD/)
+hdds=$(fdisk -l 2>/dev/null| awk -F, "/^Disk \/dev\/[vsh]d./{print\$1}" | sed -e "s@/dev/@@" -e "s/Disk/DISK/")
+
+echo "${num_cpu_phys}${model_cpu}${cores}"
+echo "  (${num_cpu} logical cpus; flags=${cpu_flags})"
+echo "RAM: ${ram} MB ${BIOS_ram}"
+echo "${hdds}"
+echo
+      '
+  done
+fi

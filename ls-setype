@@ -1,0 +1,100 @@
+#!/bin/bash
+# ls-setype v1.05 last mod 2010/8/07
+# by Ryan Sawhill ryan@b19.org
+#-------------------------------------------------------------------------------
+#    Copyright 2010 Ryan Sawhill
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#-------------------------------------------------------------------------------
+# I originally conceived this as a simple 1-line bash function to find all the
+# SELinux-confined binaries (ie, files with type *_exec_t) in the current dir.
+# I wanted to get some practice with getopts, so naturally, I couldn't pass up
+# an opportunity to make it more complicated. ;)
+# Check out `help getopts` for explanations of the getopts stuff.
+#
+# For the record, GNU find can search for files based on SELinux contexts (e.g.
+# find -context '*exec_t*'), but that's much more than I usually need. This was
+# designed to fulfill a simple need with style & act as a simple example script.
+# Enjoy!
+#-------------------------------------------------------------------------------
+
+zero=`basename $0`
+version=$(head -n2 $0 | grep -o "$zero v.*")
+
+unset v R
+
+t='_exec_t'
+
+USAGE(){ echo "Usage: $zero [-v] [-R] [-t TYPE] [DIR|FILE]..."; }
+XHELP(){ USAGE
+echo "Show files of SELinux type TYPE in DIR
+Uses ls, grep, awk, & column to show only filenames & their SELinux type
+  -t: if omitted, TYPE defaults to *_exec_t
+  -v: TYPE is inverted, a la grep -v
+  -R: recursion of dirs is enabled
+
+Examples:
+  $zero /usr/sbin
+  $zero -v /usr/sbin /sbin
+  $zero -Rt user_home_t /etc
+  $zero -vt r_home ~/*
+
+Notes:
+  TYPE is actually a pattern for grep, so partial types are OK
+  Files will be erroneously found if they have TYPE in their name"
+# I could've avoided the above by making it much more complicated ...
+# but I decided to KIS & stick with grep-ing through ls output
+echo "  Bash getopts is used to parse options, so \`$zero -Rvtsyslog_t\` works
+  If no args provided, operates on cwd just like ls
+  -R is problematic--you won't be able to tell which level a file is at
+
+Version info: $version
+Report bugs or suggestions to <ryan@b19.org>
+See <http://b19.org/linux> for the latest version"
+exit
+}
+
+# check for help query
+case ${1##*-} in
+  help|h|\?) XHELP
+esac
+
+# otherwise, parse cmdline opts
+while getopts :vRt: option; do
+  case $option in
+    v)  v='-v'
+  ;;
+    R)  R='-R'
+  ;;
+    t)  t=$OPTARG
+  ;;
+    \?) { echo "Invalid option: -$OPTARG"; USAGE; } >&2 ; exit 1
+  esac
+done
+shift $((OPTIND-1)) # this part is very important; try commenting it out
+
+
+# print diff message depending on which options supplied
+if [[ $t = _exec_t ]]; then
+  [[ -z $v ]] && echo Showing only SELinux-confined binaries
+  [[ -n $v ]] && echo Showing all files except SELinux-confined binaries
+else
+  [[ -z $v ]] && echo Showing only files of SELinux type \'$t\'
+  [[ -n $v ]] && echo Showing all files except those of SELinux type \'$t\'
+fi >&2
+sleep 0.7
+
+# the final real work
+ls -F $R --scontext $@ | grep $v $t | awk -F: '{print$3"\t"$4}' |
+  sed 's/\ts[[:digit:]] /\t/'

@@ -1,0 +1,68 @@
+#!/bin/bash
+# servify v0.21 last mod 2010/6/04
+# by Ryan Sawhill ryan@open-pros.com
+#-------------------------------------------------------------------------------
+#    Copyright 2010 Ryan Sawhill
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version. See <http://www.gnu.org/licenses/>.
+#-------------------------------------------------------------------------------
+# This can be used to make one system have all the same packages installed as
+# another. The idea is that you run it one system (the "server") to establish a
+# baseline of installed packages. Then you copy the baseline file to another
+# system (the "station") and run the script there to install everything missing.
+#-------------------------------------------------------------------------------
+
+base="/root/rpm-baseline"
+diff="/root/toinstall"
+
+#-------------------------------------------------------------------------------
+establish_baseline() {
+> $base
+if rpm -qa --qf "%{NAME}\n" > $base; then
+  echo "Created $base! Copy it to station with same path!"
+else
+  echo "ERROR!"; exit 1
+fi
+}
+
+#-------------------------------------------------------------------------------
+servify_station() {
+> $diff
+echo -n "Computing differences between baseline and localhost ... "
+for i in `<$base`; do
+  rpm -q $i &>/dev/null || echo "install $i" >> $diff
+done
+echo "DONE!
+Checking for unavailable packages ... "
+
+if yum shell $diff 2>/dev/null | grep '^No package .* available.'; then
+  echo -e "\nThe rpms listed above were on the baseline system, but they're not"
+  echo "available via yum on THIS system, so THEY WILL NOT BE INSTALLED"
+  read -ep "Do you still want to install what we can? (y/n) "
+  [ "$REPLY" != y ] && { echo "Aborting!"; rm -f $diff; exit 1; }
+else
+  echo "Hooray! Have yum access to all rpms that were on the baseline server!"
+fi
+
+echo "Beginning yum transaction ... "
+echo run >> $diff
+yum shell $diff
+rm -f $diff
+}
+
+#-------------------------------------------------------------------------------
+# initial runtime prompt
+echo "Press b to establish baseline of installed packages [on this \'server\']"
+echo "Press s if on a \'station\' and ready to install diffs using a $base file"
+read -ep "> "
+case $REPLY in 
+  b)
+    establish_baseline ;;
+  s)
+    servify_station ;;
+  *)
+    echo IMPROPER ARGS, dood; exit 1
+esac

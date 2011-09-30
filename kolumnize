@@ -1,0 +1,133 @@
+#!/bin/bash
+# kolumnize v1.02 last mod 2010/8/12
+# by Ryan Sawhill ryan@b19.org
+#-------------------------------------------------------------------------------
+#    Copyright 2010 Ryan Sawhill
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#-------------------------------------------------------------------------------
+# PURPOSE:
+# The 'column' command can columnize input based on whitespace or based on a
+# specific character... What if you have tab-delimited columns which contain
+# spaces, and you only want to select a few of them and have them display
+# prettily? Awk or cut can grab the columns, but then, problem! The column
+# command simply doesn't accept '\t' as an argument for setting up columns.
+# You could always remember to use --output-delimiter with cut or OFS with awk
+# and specify the same with column's -s option, but you have to take care that
+# the character you choose isn't already in the input! Doh.
+# This does all that for you.
+#
+# NOTES:
+# Exit codes, just for the heck of it.
+# 1   invalid options
+# 5   more than one non-option arg supplied
+# 10  missing input
+# 20  unable to read file via $1
+# 255 exhausted ofs list              
+#
+# I'm always looking to expand my knowledge and evolve my scripts! Suggestions
+# to <ryan@b19.org> or latest version at <http://b19.org/linux>
+#-------------------------------------------------------------------------------
+
+zero=$(basename $0)
+version=$(head -n2 $0 | grep -o "$zero v.*")
+
+USAGE()
+{ echo "$zero [-d DELIM] [-f FIELD_LIST] [FILE]"; }
+
+XHELP()
+{
+USAGE
+echo "Uses 'cut' & 'column' to pull out fields and arrange them in pretty columns
+
+The two options correspond exactly to 'cut' opts of the same name
+If used, their args are passed directly to cut, which operates on FILE or STDIN
+Also, a cut output-field-separator is auto-chosen to not conflict with the input
+Then, cut's output is piped to 'column' which is told about our chosen OFS
+
+By default, $zero expects tab-delimited input and cuts only fields 1,4,5,12,13
+For a little debugging, use '-D' (debug output sent to STDERR)
+
+Version info: $version
+Bugs/suggestions to <ryan@b19.org>, latest version @ <http://b19.org/linux>"
+exit
+}
+
+#-------------------------------------------------------------------------------
+# halp
+case $1 in
+  -\?|-h|--help) XHELP
+esac
+
+# parse options (I'm partial to getopt, but sometimes it's too much)
+unset debug fs fields
+while getopts :Dd:f: opt; do
+  case $opt in
+    D)  debug=y
+  ;;
+    d)  fs="-d $OPTARG"
+  ;;
+    f)  fields="$OPTARG"
+  ;;
+    \?) { echo "$zero: Invalid option: '-$OPTARG'"; USAGE; exit 1; } >&2
+  esac
+done
+shift $((OPTIND-1))
+
+#-------------------------------------------------------------------------------
+# deal with STDIN -- file or otherwise, prefer $1 to stdin over pipe or <
+if [ $# -eq 1 ]; then
+  [[ -r $1 ]] || { echo "$zero: Unable to read file: '$1'"; exit 20; } >&2
+  [[ $debug = y ]] && echo "DEBUG: input=$1" >&2
+  INPUT=$1
+elif [ $# -gt 1 ]; then
+  echo "$zero: Too many args! One file only!" >&2
+  exit 5
+elif [ ! -c /proc/$$/fd/0 ]; then
+  # this will deal with '$0 <file' or 'cmd | $0'
+  # if you know how to do this with FDs (without a tmpfile), hit me up!
+  INPUT=$(mktemp /tmp/$zero.XXX)
+  [[ $debug = y ]] && { v=-v; echo DEBUG: input=$(readlink /proc/$$/fd/0) >&2;}
+  trap "rm $v $INPUT >&2" EXIT
+  cat > $INPUT
+else
+  echo "$zero: Missing input!" >&2
+  exit 10
+fi
+
+#-------------------------------------------------------------------------------
+# use default fields if none specified
+[[ -z $fields ]] && fields='1,4,5,12,13'
+[[ $debug = y ]] && echo "DEBUG: using '$fields' as fields" >&2
+
+# our array of possible output-field-separators to try
+ofs=(\; \` \~ \| \# + ? % , / _ @)
+
+# start our index at 0
+n=0
+
+# find an ofs character that our input doesn't contain
+while grep -q ${ofs[$n]} "$INPUT"; do
+  n=$((n+1))
+  if [[ $n -eq ${#ofs[*]} ]]; then
+    echo "$zero: Exhausted list of possible OFS chars to use -- wow!" >&2
+    exit 255
+  fi
+done
+[[ $debug = y ]] && echo -e "DEBUG: using '${ofs[$n]}' as the OFS\n" >&2
+
+#-------------------------------------------------------------------------------
+# finally, the reason we're all here
+cut ${fs} -f${fields} --output-delimiter=${ofs[$n]} "${INPUT}" |
+  column -s${ofs[$n]} -t

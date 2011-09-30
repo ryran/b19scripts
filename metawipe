@@ -1,0 +1,306 @@
+#!/bin/bash
+xUtOaL=deny
+# metawipe v2.40a last mod 2010/8/12
+# by Ryan Sawhill ryan@b19.org
+# main wiping "engine" borrowed with mods from RHGLS metadestroy kickstart
+#-------------------------------------------------------------------------------
+#    Copyright 2010 Ryan Sawhill
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#-------------------------------------------------------------------------------
+# This will wipe out the beginning and end of every partition on all drives it
+# can find, including a full wipe of the MBRs, and potentially a full zeroing of
+# the drives as well.
+#
+# I can very easily get carried away with bash programming. Take this script,
+# for example. It's something that is much more complicated than it needs to be,
+# and isn't particularly magical, but I initially had a blast putting it
+# together.
+#-------------------------------------------------------------------------------
+zero=`basename $0`
+
+# customizable pause lengths that aren't used if run with --fast
+sleep='sleep 3'
+SLEEP='sleep 6'
+
+# HELP FUNCTIONS
+USAGE()
+{
+echo "Usage: $zero [-r|-h] [-f] [-t] [-z] [-B] [BLOCKDEV]...
+       $zero [--allow-bypass|--deny-bypass|--query-bypass]
+       $zero [help|--help]"
+}
+
+XHELP()
+{
+USAGE
+echo "
+Wipe out all partitions on all BLOCKDEV specified, where BLOCKDEV is the full
+path to the device node for a block device, e.g. /dev/sda. If BLOCKDEV omitted,
+any and all attached sd? or hd? block devices will be selected for wiping.
+"
+
+echo "
+ -r, --reboot@execute reboot after wipe complete
+ -h, --halt@execute halt after wipe complete
+ -f, --fast@remove artificial pauses
+ -t, --novt@don't chvt, keep output on current terminal
+ -z, --fullzero@after wiping partitions, zero each drive
+ -B, --bypass-confirmation@bypass all confirmation prompts, see note below
+" | column -s@ -t
+
+echo "
+If run with no arguments, the user will get a lengthy explanation of what is
+to be done, and prompted with a series of questions to ensure they understand
+what they are about to do. After that, the script will switch to a blank virtual
+console and display its output there. It will essentially look for any block
+devices it can find (or if BLOCKDEV was specified and exists, that will be used)
+and then wipe out the first 10 & last 10 KB of each of those partitions
+as they are, out on the drive. After that, it will wipe the partition table in
+the MBR as well, effectively eliminating any chance of recovering the data. By
+default, there are pauses inserted into the process to make it easier to
+follow the progress of things. When it finishes, the script will exit, leaving
+the user on tty9. An option of '--reboot' or '--halt' can modify this behavior.
+
+Regarding bypassing confirmation:
+The -B and --bypass-confirmation options will likely be ignored by default.
+In order for them to be utilized the script must be run with an '--allow-bypass'
+option first. This must be given on the cmdline as a single argument. It will
+modify the appropriate setting in the script file itself. There is also an
+opposite '--deny-bypass' switch which will revert to the default behavior.
+Additionally, you may use a '--query-bypass' option to check which behavior
+this script is currently set to. In addition to text output, exit code 9 will
+be returned if set to deny; exit code 21 if set to allow. Exit code of 1 means
+error of course--likely because someone mukked with the script by hand.
+
+YOU USE THIS SCRIPT AT YOUR OWN RISK"
+exit
+}
+
+#-------------------------------------------------------------------------------
+# POSITIONAL PARAMETER PARSING FUNCTION
+PARSE()
+{
+unset post fast bypass novt fullzero drives
+until [[ $1 = -- ]]; do 
+  case $1 in
+  --query-bypass)
+      [[ $xUtOaL = allow || $xUtOaL = deny ]] \
+        || { echo "$zero: ambiguous bypass setting! status unknown"; exit 1; }
+      echo "bypass=$xUtOaL"
+      [[ $xUtOaL = deny ]] && exit 9 || exit 21
+  ;;
+  --allow-bypass)
+      sed -i '2s/xUtOaL=.*/xUtOaL=allow/' "$0"
+      if head -n2 "$0" | grep -q 'xUtOaL=allow'; then
+        echo "$zero will now allow skipping confirmation prompts"; exit
+      else
+        echo "$zero: unknown error! allow-bypass setting was not set!"; exit 1
+      fi
+  ;;
+  --deny-bypass)
+      sed -i '2s/xUtOaL=.*/xUtOaL=deny/' "$0"
+      if head -n2 "$0" | grep -q 'xUtOaL=deny'; then
+        echo "$zero will now ignore any bypass options"; exit
+      else
+        echo "$zero: unknown error! deny-bypass setting was not set!"; exit 1
+      fi
+  ;;
+  -r|--reboot)  [[ -z $post ]] && post=reboot \
+      || { echo "$zero: conflicting argument -- '$1'"; USAGE; exit 1; }
+  ;;
+  -h|--halt)    [[ -z $post ]] && post=halt \
+      || { echo "$zero: conflicting argument -- '$1'"; USAGE; exit 1; }
+  ;;
+  -f|--fast)                  fast=y
+  ;;
+  -t|--novt)                  novt=y
+  ;;
+  -z|--fullzero)              fullzero=y
+  ;;
+  -B|--bypass-confirmation)   bypass=y
+  esac
+  shift
+done
+shift
+
+# SETUP DRIVES TO WIPE
+if [ $# -eq 0 ]; then
+  drives=$(ls /dev/[shv]d? /dev/xvd? 2>/dev/null|xargs echo)
+  autodetected=y
+else
+  until [ $# -eq 0 ]; do
+    minor=$(awk /${1#/dev/}$/' {print $2}' /proc/partitions)
+    if [[ -b $1 && $minor -eq 0 ]]; then
+      drives="$drives $1"
+      shift
+      autodetected=n
+    else
+      echo "$zero: invalid block device specified -- '$1'"
+      if [[ ${1:8} -gt 0 || ${1:9} -gt 0 ]]; then
+        echo "$zero: perhaps '${1%[[:digit:]]}' was intended?"
+      fi
+      USAGE
+      exit 1
+    fi
+  done
+fi
+}
+
+#-------------------------------------------------------------------------------
+# START PARSING POSITIONAL PARAMS
+
+case ${1##*-} in
+  help|\?) XHELP
+esac
+
+Sopts="TrhftzB"
+Lopts="allow-bypass,deny-bypass,query-bypass,reboot,halt,fast,novt,fullzero,\
+bypass-confirmation"
+getopt -Q --name=$zero -o $Sopts -l $Lopts -- $* || { USAGE; exit 1; }
+
+PARSE $(getopt -u --name=$zero -o $Sopts -l $Lopts -- $*)
+
+#-------------------------------------------------------------------------------
+# ARE WE ALLOWED TO BYPASS CONFIRMATIONS OR NOT?
+if [[ $bypass = y ]]; then
+  [[ $xUtOaL != allow ]] \
+    && { echo -e "(Bypass not allowed. See: $zero -?|--help)\n"; unset bypass; }
+fi
+
+# KITTEN-EATING WARNING
+if [[ $bypass != y ]]; then
+  echo "CAUTION! THIS SCRIPT IS DANGEROUS!"
+  echo "IT WILL EAT YOUR KITTENS & STEAL YOUR CHILDREN. YOU HAVE BEEN WARNED."
+  echo "TAKE ADVANTAGE OF CTRL-C AT ANY TIME TO EXIT."
+  echo
+  if [[ $autodetected = y ]]; then
+    echo "You have chosen to wipe the partition tables on all detected drives"
+  else
+    echo "You have chosen to wipe the partition tables on specified drives"
+  fi
+  echo "[ $drives ]"
+  echo
+  echo "Do you understand?"
+  until [[ $a1 = yes ]]; do read -ep "> " a1; done
+  echo
+  echo "Ok good. By the way though..."
+  echo "This does more than that; it also wipes out the beginning and end"
+  echo "of each partition -- as in, not just the MBR"
+  echo "This means it will be virtually impossible to recover your data"
+  echo "Do you understand?"
+  until [[ $a2 = yes ]]; do read -ep "> " a2; done
+  echo
+  echo "Ok. Well then. One last chance before the kitten-eating commences"
+  echo "Ctrl-c to quit, or to continue..."
+  echo "In two words, describe the following line:"
+  echo ':(){ :|:& };:'
+  until [[ $a3 = 'fork bomb' ]]; do read -ep '> ' a3; done
+fi
+
+# TO SWITCH OR NOT TO SWITCH
+if [[ $novt != y ]]; then
+  chvt 9
+  exec 1>/dev/tty9
+  exec 2>&1
+fi
+
+# TO PAUSE OR NOT TO PAUSE
+if [[ $fast = y ]]; then
+  unset sleep SLEEP
+fi
+
+#-------------------------------------------------------------------------------
+# ENDGAME
+for drive in $drives ; do
+  echo -e "\nAbout to wipe the partitions on $drive!!!"
+
+  $SLEEP
+
+  # GET DISK SIZE INFO
+  dsects=$(parted -s $drive unit s print | egrep "^Disk $drive:" |\
+   cut -d' ' -f3 | tr -d s)
+  ssize=$(parted -s $drive unit s print |\
+   egrep "^Sector size \(logical/physical\):" |\
+   sed -r 's/^Sector size \(logical\/physical\): ([0-9]+)B\/.*$/\1/')
+
+  [[ $ssize -gt 0 ]] || ssize=512 # Failsafe in case the parted magic fails
+
+  # KILL FIRST AND LAST 10 KiB OF EACH PARTITION
+  # If you want to explicitly specify which part nums to wipe or the order to
+  # wipe them, replace next 3lines with e.g. 'for part in 7 6 5 1 2 3 4 ; do'
+  for part in \
+  $(parted -s $drive unit s print|egrep '^[[:space:]]*[15-9]+'|awk '{print $1}'|sort -rn) \
+  $(parted -s $drive unit s print|egrep '^[[:space:]]*[2-4]+'|awk '{print $1}')
+  do
+      pstart=$(parted -s $drive unit s print |\
+       egrep "^[[:space:]]*$part[[:space:]]+" | tr -d s | awk '{print $2}')
+      pend=$(parted -s ${drive} unit s print |\
+  	   egrep "^[[:space:]]*$part[[:space:]]+" | tr -d s | awk '{print $3}')
+
+      echo -e "\n========= Partition START for ${drive}${part}: $pstart"
+      dd if=/dev/urandom of=$drive bs=$ssize count=20 seek=$pstart
+      $sleep
+      echo "--------- Partition END for ${drive}${part}: $pend"
+      dd if=/dev/urandom of=$drive bs=$ssize count=20 seek=$((pend-20))
+      $sleep
+  done
+
+  # KILL MBR/PARTITION TABLE
+  # Use one KiB blocks since that's what sfdisk uses to report disk size
+  echo -e "\n^^^^^^^^^^^^^^^^^^^^About to wipe MBR on $drive!!!"
+  $sleep
+  dd if=/dev/urandom of=$drive bs=$ssize count=20
+  # GPT places a 2ndary header at end of volume that also needs to be deleted:
+  dd if=/dev/urandom of=$drive bs=$ssize seek=$((dsects-20)) count=21
+  $SLEEP
+done
+
+#-------------------------------------------------------------------------------
+# FULLZERO CODE
+# I haven't gotten around to testing the following; it looks good to me, but it
+# might not work properly and could even ruin your life
+# If you want an explanation:
+# We're using dd to zero out each drive & bash job-control to parallelize
+if [[ $fullzero = y ]]; then
+  unset pids
+  echo "Beginning to zero whole drive(s)..."
+  for drive in $drives; do
+    dd if=/dev/zero of=${drive} bs=4096 &
+    pids="$pids $!"
+  done
+  sleep 5s
+# Then, every two minutes we print out progress of each of these dd processes
+# Unfortunately, this part isn't magical enough to tell you which disk it is
+# printing progress info about--get in touch with me if you've got suggestions
+# I haven't really looked into it, but I'm sure there's a way
+  for pid in $pids; do
+    while kill -0 $pid; do kill -USR1 $pid; sleep 2m; done&
+  done
+  wait
+fi
+
+#-------------------------------------------------------------------------------
+# PROLOGUE
+echo DONE WITH METAWIPE SCRIPT
+
+if [[ $post = reboot ]]; then
+  echo REBOOTING...; $S
+  for X in s u b; do echo $X > /proc/sysrq-trigger; sleep 2; done
+  sleep 3
+elif [[ $post = halt ]]; then
+  echo HALTING...; $S
+  for X in s u o; do echo $X > /proc/sysrq-trigger; sleep 2; done
+  sleep 3
+fi
