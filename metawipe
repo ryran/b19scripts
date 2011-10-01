@@ -1,10 +1,9 @@
 #!/bin/bash
 xUtOaL=deny
 # metawipe v2.40a last mod 2010/8/12
-# by Ryan Sawhill ryan@b19.org
 # main wiping "engine" borrowed with mods from RHGLS metadestroy kickstart
-#-------------------------------------------------------------------------------
-#    Copyright 2010 Ryan Sawhill
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -13,11 +12,8 @@ xUtOaL=deny
 #
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
 #-------------------------------------------------------------------------------
 # This will wipe out the beginning and end of every partition on all drives it
 # can find, including a full wipe of the MBRs, and potentially a full zeroing of
@@ -28,7 +24,9 @@ xUtOaL=deny
 # and isn't particularly magical, but I initially had a blast putting it
 # together.
 #-------------------------------------------------------------------------------
+
 zero=`basename $0`
+version=$(head -n3 $0 | grep -o "$zero v.*")
 
 # customizable pause lengths that aren't used if run with --fast
 sleep='sleep 3'
@@ -84,7 +82,11 @@ this script is currently set to. In addition to text output, exit code 9 will
 be returned if set to deny; exit code 21 if set to allow. Exit code of 1 means
 error of course--likely because someone mukked with the script by hand.
 
-YOU USE THIS SCRIPT AT YOUR OWN RISK"
+YOU USE THIS SCRIPT AT YOUR OWN RISK
+
+Version info: $version
+Report bugs or suggestions to <ryan@b19.org>
+See <http://github.com/ryran/b19scripts> for the latest version"
 exit
 }
 

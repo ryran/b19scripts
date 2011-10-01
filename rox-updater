@@ -1,8 +1,7 @@
 #!/bin/bash
 # rox-updater v0.05 last mod 2010/8/12
-# by Ryan Sawhill ryan@b19.org
-#-------------------------------------------------------------------------------
-#    Copyright 2010 Ryan Sawhill
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2011 Ryan Sawhill <ryan@b19.org>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -11,11 +10,8 @@
 #
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
 #-------------------------------------------------------------------------------
 #
 # ! ! ! THIS WILL NOT WORK IF YOU FAIL TO EDIT THE FOLLOWING LINE PROPERLY ! ! !

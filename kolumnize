@@ -1,8 +1,7 @@
 #!/bin/bash
 # kolumnize v1.02 last mod 2010/8/12
-# by Ryan Sawhill ryan@b19.org
-#-------------------------------------------------------------------------------
-#    Copyright 2010 Ryan Sawhill
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -11,11 +10,8 @@
 #
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
 #-------------------------------------------------------------------------------
 # PURPOSE:
 # The 'column' command can columnize input based on whitespace or based on a
@@ -36,8 +32,8 @@
 # 20  unable to read file via $1
 # 255 exhausted ofs list              
 #
-# I'm always looking to expand my knowledge and evolve my scripts! Suggestions
-# to <ryan@b19.org> or latest version at <http://b19.org/linux>
+# I'm always looking to expand my knowledge and evolve my scripts! Send your
+# suggestions to <ryan@b19.org>.
 #-------------------------------------------------------------------------------
 
 zero=$(basename $0)
@@ -60,7 +56,8 @@ By default, $zero expects tab-delimited input and cuts only fields 1,4,5,12,13
 For a little debugging, use '-D' (debug output sent to STDERR)
 
 Version info: $version
-Bugs/suggestions to <ryan@b19.org>, latest version @ <http://b19.org/linux>"
+Report bugs or suggestions to <ryan@b19.org>
+See <http://github.com/ryran/b19scripts> for the latest version"
 exit
 }
 

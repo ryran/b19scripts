@@ -1,13 +1,17 @@
 #!/bin/bash
 # servify v0.21 last mod 2010/6/04
-# by Ryan Sawhill ryan@open-pros.com
-#-------------------------------------------------------------------------------
-#    Copyright 2010 Ryan Sawhill
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2010 Ryan Sawhill <ryan@b19.org>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
 #    the Free Software Foundation, either version 3 of the License, or
-#    (at your option) any later version. See <http://www.gnu.org/licenses/>.
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
 #-------------------------------------------------------------------------------
 # This can be used to make one system have all the same packages installed as
 # another. The idea is that you run it one system (the "server") to establish a
@@ -18,7 +22,6 @@
 base="/root/rpm-baseline"
 diff="/root/toinstall"
 
-#-------------------------------------------------------------------------------
 establish_baseline() {
 > $base
 if rpm -qa --qf "%{NAME}\n" > $base; then
@@ -28,7 +31,6 @@ else
 fi
 }
 
-#-------------------------------------------------------------------------------
 servify_station() {
 > $diff
 echo -n "Computing differences between baseline and localhost ... "
@@ -53,7 +55,6 @@ yum shell $diff
 rm -f $diff
 }
 
-#-------------------------------------------------------------------------------
 # initial runtime prompt
 echo "Press b to establish baseline of installed packages [on this \'server\']"
 echo "Press s if on a \'station\' and ready to install diffs using a $base file"
