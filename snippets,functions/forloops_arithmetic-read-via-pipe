@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# try running this with some gibberish as arguments
+# also run it by piping gibberish to it (say, from echo)
+
+if [ $# -eq 0 ]; then
+	read DATA
+else
+	DATA=$*
+fi
+
+len=`expr length "$DATA"`
+
+for (( n=0; n<=$len; n=n+2 )); do
+	echo -n "${DATA:n:2} "
+done ; echo
+
+## the commands below are equivalent to the for loop above
+## check out: 'help -m for' to get more details
+# a=0
+# while [ $a -le $len ]; do
+#	echo -n "${DATA:a:2} "
+#	a=$((a+2))
+# done ; echo

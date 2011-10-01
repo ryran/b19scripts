@@ -1,0 +1,15 @@
+#!/bin/bash
+# you can use the let builtin to increment a variable
+
+unset found FAILED
+
+# lets search for these terms in /etc/passwd
+for u in zeboo adalia bash bob ryran amy root `whoami`
+# for each one we find, we will incrememnt a var called "found"
+# for each one we don't find, we'll increment a variable called "FAILED"
+do
+  grep -q $u /etc/passwd && let "found+=1" || let "FAILED+=1"
+done
+
+echo "found:  $found"
+echo "failed: $FAILED"

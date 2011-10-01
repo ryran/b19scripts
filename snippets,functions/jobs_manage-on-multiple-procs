@@ -1,0 +1,37 @@
+#!/bin/bash
+# Scenario:
+# You've got a data-crunching process that you're tasked with getting going on
+# your system and keeping up as long as possible. You've got 4 CPU cores on
+# this system. You could of course kick off 4 separate copies of the process,
+# but instead, let's make a launcher script to kick it off 4 times in parallel.
+
+# To complicate things, our data-crunching program is somewhat unstable--let's
+# say that the odds of it failing once a week are about 1 in 4.
+# So if one of our four crunchers (that were launched by this script) die, we
+# want to know about it, and we want to kill the remaining 3, and then start all
+# over.
+
+echo `basename $0` STARTED
+
+# Here I'm going to use a sleep command in a subshell instead of a /bin path.
+# In our scenario it'd more likely be something like '/usr/bin/datacruncher&'
+( sleep 15; exit )&
+( sleep 30; exit )&
+( sleep 5; exit )& echo "$! is the 5sec process"
+( sleep 30; exit )&
+
+pids=`jobs -p` #have a look at 'help jobs'
+echo pids spawned: $pids
+
+while [[ `jobs -p` == $pids ]] ; do
+  sleep 1
+done
+
+echo One of `basename $0`\'s subprocesses on `hostname` died at `date +%F,%T`
+echo Killing remaing PIDs: `jobs -p`
+
+kill `jobs -p`
+
+# Have a look at this line later if exec is new to you.
+# When you're ready, note exec is a builtin so 'help exec' is what you want.
+echo RESTARTING; sleep 2; echo; exec $0

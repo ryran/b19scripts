@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# If you're just starting with bash, and don't immediately see what this will
+# do, hint #1: the '&' allows a process to start in the background, so that
+# subsequent commands do not need to wait for it to finish.
+#
+# Sooo this gives you a simple security test: if running this crashes your box,
+# you should google about tweaking your /etc/security/limits.conf file.
+# (Meaning, you might want to save your work before you run this.)
+
+function babymaker()
+{
+  echo My name is $$.
+  for i in 3 2 1 ; do echo -n "$i..." ; sleep 1 ; done
+  echo I make two babies now.
+  bash -c babymaker&
+  bash -c babymaker&
+}
+
+# This demonstrates bash's ability to export a function. Keep in mind however,
+# that functions exported by a script will not be available outside of the
+# script. 'export -f' could still be useful though -- in bash's startup scripts,
+# for example.
+export -f babymaker
+
+# Here (just to prove the export worked) we're actually running a bash command
+# 'babymaker' versus calling the 'babymaker' function direct from this script.
+bash -c babymaker
