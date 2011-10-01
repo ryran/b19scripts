@@ -1,9 +1,7 @@
 #!/bin/bash
 # hhwchk v2.06-02 last mod 2011/9/03
-# by Ryan Sawhill, ryan@b19.org
-# <http://github.com/ryran/hhwchk>
-#-------------------------------------------------------------------------------
-#    Copyright 2011 Ryan Sawhill
+# Latest version at <http://github.com/ryran/hhwchk>
+# Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -12,11 +10,8 @@
 #
 #    This program is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <gnu.org/licenses/gpl.html>.
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
 #-------------------------------------------------------------------------------
 # Hops into systems via ssh to check out what they have in the way of hardware.
 #
