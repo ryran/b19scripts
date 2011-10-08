@@ -1,0 +1,57 @@
+#!/bin/bash
+# a7crypt v0.10 last mod 2011/10/08
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2011 Ryan Sawhill <ryan@b19.org>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#-------------------------------------------------------------------------------
+# This is a super-simple wrapper for gpg.
+# The idea is that you could create a shortcut in your desktop environment to
+# run this script (making sure to modify the settings to run it in a terminal).
+# Whenever you need to do some quick ascii-armor-encrypting of text, you simply
+# click the icon, paste in your text, and you're good to go! Likewise for
+# decrypting text. Nothing special.
+# Feel free to hit me up if you have any questions or suggestions.
+#-------------------------------------------------------------------------------
+
+# Check for positional parameters
+if [ $# -ne 0 ]; then
+	echo "Simple encryption/decryption using GPG. Meant to be run interactively w/no args."
+	exit 1
+fi
+
+# Set colors
+RED='\033[31m' ; BLUE='\033[34m' ; BLACK='\033[0m' ; GREEN='\033[32m'
+
+# All the work inside a function to allow looping
+MAIN(){
+echo -en "Would you like to [${RED}e${BLACK}]ncrypt or [${RED}d${BLACK}]ecrypt? "
+read
+
+if [[ $REPLY = e ]]; then
+	echo -e "${BLUE}Steps: passphrase, type/paste data, Ctrl-d to encrypt${BLACK}"
+	gpg  -ac --force-mdc
+	echo -en "\n${GREEN}DONE! Ctrl-c to exit or Enter to go again${BLACK}"
+	read
+	MAIN
+elif [[ $REPLY = d ]]; then
+	echo -e "${BLUE}Steps: paste encrypted message, enter passphrase, Ctrl-d to decrypt${BLACK}"
+	gpg -d
+	echo -en "\n${GREEN}DONE! Ctrl-c to exit or Enter to go again${BLACK}"
+	read
+	MAIN
+else
+	echo "Improper input -- must enter 'e' or 'd'"
+	MAIN
+fi
+}
+
+MAIN
