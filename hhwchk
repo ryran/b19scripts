@@ -1,5 +1,5 @@
 #!/bin/bash
-# hhwchk v2.06-02 last mod 2011/9/03
+# hhwchk v2.06-03 last mod 2011/11/16
 # Latest version at <http://github.com/ryran/hhwchk>
 # Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -238,7 +238,7 @@ EOF
 [[ $ethtool = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
 if which ethtool &>/dev/null; then
-  ethdevs=$(ifconfig | awk '/^peth|^eth|^em/{print$1}' | grep -v :)
+  ethdevs=$(ifconfig | awk '/^peth|^eth|^em|^usb/{print$1}' | grep -v :)
   ethtool_linkinfo=$(for i in $ethdevs;do echo -e "  $i\tlink=$(ethtool $i|awk '/Link detected:/{print$3}')$(spd=$(ethtool $i|awk '/Speed: 1/{print$2}');[[ -n $spd && $spd != Unknown! ]] && echo ", speed=$spd")";done)
                  echo "${ethtool_linkinfo}"
 fi
