@@ -1,5 +1,5 @@
 #!/bin/bash
-# hhwchk v2.06-03 last mod 2011/11/16
+# hhwchk v2.07 last mod 2011/11/16
 # Latest version at <http://github.com/ryran/hhwchk>
 # Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -195,7 +195,7 @@ EOF
 
 [[ $hostname = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
-                 echo "HOST: $(uname -nr)"
+                 echo -e "HOST: $(uname -nr)"
 EOF
 
 [[ $cpu = y || $verbose = y ]] &&
@@ -209,24 +209,24 @@ if [[ $num_cpu_phys -ne $num_cpu ]]; then
   [[ -n $num_cores_per_cpu ]] && cores=", ${num_cores_per_cpu} cores/ea"
 fi
 cpu_flags=$(egrep -o "pae|lm|vmx|svm" /proc/cpuinfo|sort -u|xargs echo|sed "s/ /,/g")
-                 echo "CPU: ${num_cpu} logical cpus; flags=${cpu_flags}"
-                 echo "  ${num_cpu_phys}${model_cpu}${cores}"
-                 [[ -n $dmi ]] && echo "  ${BIOS_model_cpu}"
-                 [[ -n $dmi ]] && echo "  ${BIOS_phys_num_cpu}${BIOS_cpu_cores}"
+                 echo -e "CPU: ${num_cpu} logical cpus; flags=${cpu_flags}"
+                 echo -e "  ${num_cpu_phys}${model_cpu}${cores}"
+                 [[ -n $dmi ]] && echo -e "  ${BIOS_model_cpu}"
+                 [[ -n $dmi ]] && echo -e "  ${BIOS_phys_num_cpu}${BIOS_cpu_cores}"
 
 EOF
 
 [[ $ram = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
 sum_ram=$(free -m | awk /^Mem:/{print\$2})
-                 echo "RAM: ${sum_ram} MB"
-                 [[ -n $dmi ]] && echo "  ${BIOS_ram}"
+                 echo -e "RAM: ${sum_ram} MB"
+                 [[ -n $dmi ]] && echo -e "  ${BIOS_ram}"
 EOF
 
 [[ $disks = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
 hdds=$(fdisk -l 2>/dev/null | awk '/^Disk.*[vsh]d.|^Disk.*xvd./ {NUMDISKS++; BYTES+=$5; DISK[$2]=$3" "$4} END {GBYTES=BYTES/1024/1024/1024; printf GBYTES" GB total, "NUMDISKS" disks\n"; for (i in DISK) print i,DISK[i]}' | sed -e "s@/dev/@  @" -e "s/,$//" -e "s/://")
-                 echo "DISKS: ${hdds}"
+                 echo -e "DISKS: ${hdds}"
 EOF
 
 [[ $net = y || $verbose = y ]] &&
@@ -240,7 +240,7 @@ cat >> $cmdscript <<\EOF
 if which ethtool &>/dev/null; then
   ethdevs=$(ifconfig | awk '/^peth|^eth|^em|^usb/{print$1}' | grep -v :)
   ethtool_linkinfo=$(for i in $ethdevs;do echo -e "  $i\tlink=$(ethtool $i|awk '/Link detected:/{print$3}')$(spd=$(ethtool $i|awk '/Speed: 1/{print$2}');[[ -n $spd && $spd != Unknown! ]] && echo ", speed=$spd")";done)
-                 echo "${ethtool_linkinfo}"
+                 echo -e "${ethtool_linkinfo}"
 fi
 EOF
 
@@ -280,13 +280,18 @@ EOF
 # finally, we run our script either on localhost or remotely over ssh
 
 # I like color; please, sue me
-black='\E[00;30m'; red='\E[00;31m'; green='\E[00;32m'; orange='\E[00;33m'
+reset='\033[0m'; red='\E[00;31m'; green='\E[00;32m'; orange='\E[00;33m'
 blue='\E[00;34m'; cyan='\E[00;36m'; magenta='\E[00;37m'
 c_sep=$cyan
 c_h=$green
 c_text=$orange
 
-[[ $nocolor = y ]] && unset c_sep c_h c_text black
+if [[ $nocolor = y ]]; then
+  unset c_sep c_h c_text black
+elif [[ $localhost = y && $opts != n ]]; then
+  sed -i -e 's/HOST: /\\E[01;31m&\\E[00;31m/' -e 's/CPU: /\\E[01;33m&\\E[00;33m/' -e 's/RAM: /\\E[01;34m&\\E[00;34m/' -e 's/DISKS: /\\E[01;36m&\\E[00;36m/' -e 's/NET:/\\E[01;32m&\\E[00;32m/' -e 's/VGA:/\\E[01;35m&\\E[00;35m/' $cmdscript
+  #cat $cmdscript
+fi
 
 if [[ $localhost = y ]]; then
   bash $cmdscript
@@ -297,4 +302,4 @@ else
     ssh ${pre}${HOST}${suf} "$(cat $cmdscript)"
   done
 fi
-echo -en "$black"
+echo -en "$reset"
