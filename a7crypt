@@ -1,5 +1,5 @@
 #!/bin/bash
-# a7crypt v0.10 last mod 2011/10/08
+# a7crypt v0.12 last mod 2011/11/25
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -23,28 +23,58 @@
 #-------------------------------------------------------------------------------
 
 # Check for positional parameters
-if [ $# -ne 0 ]; then
+if [[ $1 = '--openssl' || $1 = '-o' ]] || ! which gpg &>/dev/null; then
+	MAIN(){ OPENSSL; }
+elif [ $# -ne 0 ]; then
 	echo "Simple encryption/decryption using GPG. Meant to be run interactively w/no args."
+	echo "An argument of '--openssl' or '-o' is supported, which will force use of OpenSSL"
+	echo "instead of GPG for both encryption & decryption."
 	exit 1
+else
+	MAIN(){ GPG; }
 fi
 
 # Set colors
-RED='\033[31m' ; BLUE='\033[34m' ; BLACK='\033[0m' ; GREEN='\033[32m'
+RED='\E[31m' ; BLUE='\E[34m' ; BLACK='\E[0m' ; GREEN='\E[32m'
 
-# All the work inside a function to allow looping
-MAIN(){
+
+GPG(){
 echo -en "Would you like to [${RED}e${BLACK}]ncrypt or [${RED}d${BLACK}]ecrypt? "
 read
 
 if [[ $REPLY = e ]]; then
-	echo -e "${BLUE}Steps: passphrase, type/paste data, Ctrl-d to encrypt${BLACK}"
+	echo -e "${BLUE}Steps: enter passphrase, type/paste text, Ctrl-d to encrypt"
+	echo -e "Pressing Ctrl-d on an EMPTY line will make distinguishing encrypted text easier${BLACK}\n"
 	gpg  -ac --force-mdc
 	echo -en "\n${GREEN}DONE! Ctrl-c to exit or Enter to go again${BLACK}"
 	read
 	MAIN
 elif [[ $REPLY = d ]]; then
-	echo -e "${BLUE}Steps: paste encrypted message, enter passphrase, Ctrl-d to decrypt${BLACK}"
+	echo -e "${BLUE}Steps: paste gpg-encrypted message, enter passphrase, Ctrl-d to decrypt${BLACK}\n"
 	gpg -d
+	echo -en "\n${GREEN}DONE! Ctrl-c to exit or Enter to go again${BLACK}"
+	read
+	MAIN
+else
+	echo "Improper input -- must enter 'e' or 'd'"
+	MAIN
+fi
+}
+
+OPENSSL(){
+echo -en "Would you like to [${RED}e${BLACK}]ncrypt or [${RED}d${BLACK}]ecrypt? "
+read
+
+if [[ $REPLY = e ]]; then
+	echo -e "${BLUE}Steps: enter passphrase, type/paste text, Ctrl-d TWICE to encrypt"
+	echo -e "Pressing Ctrl-d on an EMPTY line will make distinguishing encrypted text easier${BLACK}\n"
+	openssl aes-256-cbc -a -salt
+	echo -en "\n${GREEN}DONE! Ctrl-c to exit or Enter to go again${BLACK}"
+	read
+	MAIN
+elif [[ $REPLY = d ]]; then
+	echo -e "${BLUE}Steps: enter passphrase, paste openssl-encrypted message, Ctrl-d TWICE to decrypt${BLACK}\n"
+	openssl aes-256-cbc -d -a
 	echo -en "\n${GREEN}DONE! Ctrl-c to exit or Enter to go again${BLACK}"
 	read
 	MAIN
