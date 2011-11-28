@@ -1,0 +1,56 @@
+#!/bin/bash
+# net-notifyd v0.01 last mod 2011/11/29
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2011 Ryan Sawhill <ryan@b19.org>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#-------------------------------------------------------------------------------
+# This simple script is designed to be run automatically when a user logs into
+# their desktop. (In fedora open 'gnome-session-properties' & add it; log out.)
+# It then sleeps in the background, waiting to receive a message from root via a
+# fifo in /tmp. If it receives a keyword that it knows about, it displays a
+# preset message to the user in the GUI, via the notify-send command.
+#
+# Perhaps it is obvious, but the idea here is that a SA could ssh into systems
+# with a for loop and drop a keyword to the pipe, ensuring that a message
+# would get displayed to the currently logged-in user, without having to worry
+# about who they are.
+#
+# Explicit instructions:
+# After running this script (preferably via gnome-session-properties), run:
+#     echo warning > /tmp/net-notifyd
+# either as yourself or as root to test it. As you can see below, "logout" is
+# another keyword I created a message for. The daemon ignores anything else.
+#
+# I just named this in a hurry, so I haven't done any research on similarly-
+# named projects. Let me know if you've got a better idea.
+# Also, if you've got suggestions on implementation, I'm all ears!
+
+fifo=/tmp/$(basename $0)
+rm $fifo 2>/dev/null
+mkfifo -m 600 $fifo
+trap "rm $fifo 2>/dev/null" EXIT
+
+PARSE_command() {
+  if [[ $net_command = logout ]]; then
+    notify-send -u critical "Admin Says:" "Reboot required. If you don't log out in the next 120 seconds, you will lose your unsaved work."
+  elif [[ $net_command = warning ]]; then
+    notify-send -u critical "Admin Says:" "Just a warning. In 10 minutes we're going to need to reboot your PC."
+  fi
+}
+
+LISTEN_net() {
+  net_command=$(cat $fifo)
+  PARSE_command
+  LISTEN_net
+}
+
+LISTEN_net
