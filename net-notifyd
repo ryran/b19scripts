@@ -1,5 +1,5 @@
 #!/bin/bash
-# net-notifyd v0.01 last mod 2011/11/29
+# net-notifyd v0.02 last mod 2011/11/29
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -48,7 +48,7 @@ PARSE_command() {
 }
 
 LISTEN_net() {
-  net_command=$(cat $fifo)
+  net_command=$(<$fifo)
   PARSE_command
   LISTEN_net
 }
