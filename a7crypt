@@ -1,5 +1,5 @@
 #!/bin/bash
-# a7crypt v0.99a last mod 2011/11/28
+# a7crypt v0.99b last mod 2011/11/28
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -67,7 +67,7 @@ MAIN() {                                                                    #---
 
 ## Here we warn the user about using OpenSSL, and give a chance to hide warnings
 if [[ $MODE = OpenSSL-AES && ! -f /tmp/$zero.nowarn.$UID ]]; then
-	echo -en "You're running $zero in OpenSSL mode--either by choice, or because we could not locate GPG/GPG2.\nThis mode uses the command 'openssl aes-256-cbc' to encrypt your text.\nThe corresponding command for decryption is 'openssl aes-256-cbc -a -d' <-- which might be useful to know if you were to lose this app, because OpenSSL doesn't add any pretty info to your encrypted message like GPG, nor is OpenSSL simple-minded enough to decrypt a block of text you pass to it without using the proper arguments." | zenity --text-info --title="$zero [$MODE]: Warning" --cancel-label="Understood, don't tell me for a while" --width=710 --height=210 || touch $A7/openssl.nowarn
+	echo -en "You're running $zero in OpenSSL mode--either by choice, or because we could not locate GPG/GPG2.\nThis mode uses the command 'openssl aes-256-cbc' to encrypt your text.\nThe corresponding command for decryption is 'openssl aes-256-cbc -a -d' <-- which might be useful to know if you were to lose this app, because OpenSSL doesn't add any pretty info to your encrypted message like GPG, nor is OpenSSL simple-minded enough to decrypt a block of text you pass to it without using the proper arguments." | zenity --text-info --title="$zero [$MODE]: Warning" --cancel-label="Understood, don't tell me for a while" --width=724 --height=210 || touch /tmp/$zero.nowarn.$UID
 fi
 
 ## GPG sadly will not overwrite files
@@ -97,17 +97,18 @@ elif [[ $CHOICE = Decrypt ]]; then
 
 else
 	if [[ $SWITCH_TO = OpenSSL ]]; then
-		which openssl &>/dev/null &&
-			init_env_OPENSSL ||
-			{ zenity --error --title="Missing OpenSSL" --text="OpenSSL not found in your \$PATH. That's so shocking I almost don't believe it. In any case, if you really want to try it out, you can install it using your software-management application."; exit 1; }
-
+		if which openssl &>/dev/null; then
+			init_env_OPENSSL
+		else
+			zenity --error --title="Missing OpenSSL" --text="OpenSSL not found in your \$PATH. That's so shocking I almost don't believe it. In any case, if you really want to try it out, you can install it using your software-management application." --width=400
+		fi
 	elif [[ $SWITCH_TO = GPG ]]; then
 		if which gpg2 &>/dev/null; then
 			init_env_GPG2
 		elif which gpg &>/dev/null; then
 			init_env_GPG
 		else
-			zenity --error --title "Missing GPG" --text 'Neither GPG nor GPG2 found in your $PATH. You can install either one of them using your software-management application.'
+			zenity --error --title "Missing GPG" --text 'Neither GPG nor GPG2 were found in your $PATH. You can install either of them using your software-management application.' --width=400
 		fi
 	fi
 	MAIN
@@ -137,7 +138,7 @@ elif which openssl &>/dev/null; then
 	init_env_OPENSSL
 
 else
-	zenity --error --title "Missing GPG(2)/OpenSSL" --text 'Neither GPG, GPG2, nor OpenSSL were found in your $PATH. Use your software-management application to install one of them.'
+	zenity --error --title "You pulling my leg?" --text 'Neither GPG, GPG2, nor OpenSSL were found in your $PATH..? Right. If you say so. Use your software-management application to install one of them.' --width=400
 	exit 1
 fi
 
