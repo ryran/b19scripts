@@ -1,5 +1,5 @@
 #!/bin/bash
-# hhwchk v2.09d last mod 2011/11/28
+# hhwchk v2.09e last mod 2011/11/28
 # Latest version at <http://github.com/ryran/hhwchk>
 # Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -71,7 +71,7 @@ echo "Usage: hhwchk [-Nbcdeghnr|-Nv] SSH_HOST...|--localhost"
 echo "  or:  hhwchk -?|--help"
 }
 
-F_XHELP() {
+XHELP() {
 USAGE
 echo "Use proc & standard tools to report hw info on localhost or ssh hosts
 
