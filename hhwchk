@@ -1,5 +1,5 @@
 #!/bin/bash
-# hhwchk v2.09b last mod 2011/11/26
+# hhwchk v2.09c last mod 2011/11/28
 # Latest version at <http://github.com/ryran/hhwchk>
 # Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -55,9 +55,9 @@
 #-------------------------------------------------------------------------------
 
 # I like color; please, sue me
-reset='\E[0;0m'; blue='\E[0;34m'; BLUE='\E[1;34m'; cyan='\E[0;36m'
-GREY='\E[01;30m'; purple='\E[0;35m'; red='\E[0;31m'; RED='\E[1;31m'
-green='\E[0;32m'; GREEN='\E[1;32m'; orange='\E[0;33m'; ORANGE='\E[1;33m'
+reset='\E[0;0m'; grey='\E[00;30m'; GREY='\E[01;30m'; red='\E[0;31m'; RED='\E[1;31m';
+green='\E[0;32m'; GREEN='\E[1;32m'; orange='\E[0;33m'; ORANGE='\E[1;33m'; blue='\E[0;34m';
+BLUE='\E[1;34m'; purple='\E[0;35m'; PURPLE='\E[1;35m'; cyan='\E[0;36m'; CYAN='\E[1;36m'
 c_sep=$cyan ; c_h=$green ; c_text=$orange
 
 version=$(head -n2 $0 | grep -o "hhwchk v.*")
@@ -66,14 +66,12 @@ version=$(head -n2 $0 | grep -o "hhwchk v.*")
 sopts='P:S:LNbcdeghnrv'
 lopts='prefix:,suffix:,localhost,nocolor,bios,cpu,disks,ethtool,graphics,hostname,net,ram,verbose'
 
-USAGE()
-{
+USAGE() {
 echo "Usage: hhwchk [-Nbcdeghnr|-Nv] SSH_HOST...|--localhost"
 echo "  or:  hhwchk -?|--help"
 }
 
-XHELP()
-{
+F_XHELP() {
 USAGE
 echo "Use proc & standard tools to report hw info on localhost or ssh hosts
 
@@ -115,15 +113,14 @@ Alternatively, run hhwchk with '--checkupdate'"
 exit
 }
 
-UPDATE()
-{
+UPDATE() {
 echo -e "${blue}Checking $0 against latest version at github.com/ryran/hhwchk ...${GREY}\n"
 latest_version_file=$(mktemp /tmp/hhwchk_latest.XXX); trap "rm $latest_version_file" EXIT
 
 # download latest version of hhwchk with wget or curl
-if which wget &>/dev/null; then
+if command -v wget >/dev/null; then
 	wget https://raw.github.com/ryran/hhwchk/master/hhwchk -O $latest_version_file
-elif which curl &>/dev/null; then
+elif command -v curl >/dev/null; then
 	curl https://raw.github.com/ryran/hhwchk/master/hhwchk -o $latest_version_file ; echo
 else
 	echo -e "${RED}Need either wget or curl in \$PATH to perform the download!${reset}"
@@ -142,7 +139,7 @@ if ! diff $0 $latest_version_file >/dev/null; then
 	# create a diff file
 	diff -u $0 $latest_version_file > $diff_file
 	# if it's installed, vim gives pretty colors
-	which vim &>/dev/null && vim $diff_file || less $diff_file
+	command -v vim >/dev/null && vim $diff_file || less $diff_file
 	echo -e "${blue}If you are sure you know what you are doing, type ${GREEN}update${blue}\nto replace $0 with the latest version${GREEN}"
 	read -p "> "
 	if [[ $REPLY = update ]]; then
@@ -155,7 +152,7 @@ if ! diff $0 $latest_version_file >/dev/null; then
 		echo -e "${cyan}Not performing update${reset}"
 	fi
 else
-	echo -e "${blue}$0 is the same version as what is on github, i.e. ${BLUE}$version${reset}"
+	echo -e "${blue}$0 is the same version as what is on github, i.e.,\n\t${BLUE}$version${reset}"
 fi
 exit
 }
@@ -166,6 +163,7 @@ case $1 in
   --help|-\?) XHELP
   ;;
   --checkupdate) UPDATE
+  ;;
 esac
 
 # check for bad switches
@@ -173,8 +171,7 @@ getopt -Q --name=hhwchk -o $sopts -l $lopts -- $* || { USAGE; exit 1; }
 
 #-------------------------------------------------------------------------------
 # parse command-line arguments
-PARSE()
-{
+PARSE() {
 opts=n
 unset pre suf localhost bios cpu disks ethtool graphics hostname net ram verbose
 until [[ $1 = -- ]]; do
@@ -213,6 +210,7 @@ until [[ $1 = -- ]]; do
   ;;
     -v|--verbose)   verbose=y; shift
                     opts=y
+  ;;
   esac
 done
 shift #(to get rid of the '--')
@@ -230,12 +228,12 @@ PARSE $(getopt -u --name=hhwchk -o $sopts -l $lopts -- $*)
 
 #-------------------------------------------------------------------------------
 # time to set up which commands to run
-cmdscript=$(mktemp /tmp/hhwchk.XXX)
+cmdscript=$(mktemp /dev/shm/hhwchk.XXX)
 trap "rm $cmdscript" EXIT
 
 [[ $bios = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
-if `which dmidecode` &>/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
+if `command -v dmidecode` >/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
   dmi=yes
   BIOS_phys_num_cpu="[bios: phys_cpus=$(dmidecode -s processor-family | wc -l), "
   BIOS_cpu_cores=$(dmidecode -t processor | awk '/Core Count/{totalcores+=$3;percpucores=$3}END{print "cores/cpu="percpucores", total_cores="totalcores"]"}')
@@ -292,7 +290,7 @@ EOF
 
 [[ $ethtool = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
-if which ethtool &>/dev/null && [[ $UID -eq 0 ]]; then
+if command -v ethtool >/dev/null && [[ $UID -eq 0 ]]; then
   ethdevs=$(ifconfig | awk '/^peth|^eth|^em|^wlan|^usb/{print$1}' | grep -v :)
   ethtool_linkinfo=$(for i in $ethdevs;do echo -e "  $i\tlink=$(ethtool $i|awk '/Link detected:/{print$3}')$(spd=$(ethtool $i|awk '/Speed: 1/{print$2}');[[ -n $spd && $spd != Unknown! ]] && echo ", speed=$spd")";done)
                  echo -e "${ethtool_linkinfo}"
@@ -313,7 +311,7 @@ EOF
 # what to do if no other display options are used
 [[ $opts = n ]] &&
 cat > $cmdscript <<\EOF
-if `which dmidecode` &>/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
+if `command -v dmidecode` >/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
   BIOS_ram=$(dmidecode -t memory|awk '/Size: [[:digit:]]/{numdims+=1;ram=$2;sumram+=ram}END{print "("sumram" MB actual)"}')
 fi
 
