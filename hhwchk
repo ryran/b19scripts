@@ -1,5 +1,5 @@
 #!/bin/bash
-# hhwchk v2.09e last mod 2011/11/28
+# hhwchk v2.09f last mod 2011/12/04
 # Latest version at <http://github.com/ryran/hhwchk>
 # Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
 #
@@ -109,22 +109,23 @@ Examples:
 Version info: $version
 Report bugs or suggestions to <ryan@b19.org>
 Or see <github.com/ryran/hhwchk> for bug tracker & latest version
-Alternatively, run hhwchk with '--checkupdate'"
+Alternatively, run hhwchk with '--update'"
 exit
 }
 
 UPDATE() {
 echo -e "${blue}Checking $0 against latest version at github.com/ryran/hhwchk ...${GREY}\n"
-latest_version_file=$(mktemp /tmp/hhwchk_latest.XXX); trap "rm $latest_version_file" EXIT
+latest_version_file=$(mktemp /tmp/hhwchk_latest.XXX)
+trap "rm $latest_version_file" EXIT
 
 # download latest version of hhwchk with wget or curl
 if command -v wget >/dev/null; then
   wget https://raw.github.com/ryran/hhwchk/master/hhwchk -O $latest_version_file
 elif command -v curl >/dev/null; then
-  curl https://raw.github.com/ryran/hhwchk/master/hhwchk -o $latest_version_file ; echo
+  curl https://raw.github.com/ryran/hhwchk/master/hhwchk -o $latest_version_file; echo
 else
   echo -e "${RED}Need either wget or curl in \$PATH to perform the download!${reset}"
-  exit 1
+  exit 255
 fi
 
 # save version string
@@ -135,6 +136,7 @@ if ! diff $0 $latest_version_file >/dev/null; then
   echo -e "${blue}The version you are running reports as:\n\t${orange}$version${blue}\nThe version on github appears to be different and reports as:\n\t${ORANGE}$latest_version${blue}"
   echo -e "Press ${GREEN}enter${blue} to see the differences between them${reset}"
   read
+  # set name of tmp diff file
   diff_file=$(mktemp /tmp/hhwchk.XXX.patch); trap "rm $diff_file" EXIT;
   # create a diff file
   diff -u $0 $latest_version_file > $diff_file
@@ -149,10 +151,10 @@ if ! diff $0 $latest_version_file >/dev/null; then
     chmod +x $0
     echo -e "${reset}"
   else
-    echo -e "${cyan}Not performing update${reset}"
+    echo -e "${cyan}Not performing update${reset}\n"
   fi
 else
-  echo -e "${blue}$0 is the same version as what is on github, i.e.,\n\t${BLUE}$version${reset}"
+  echo -e "${blue}$0 is the same version as what is on github, i.e.,\n\t${BLUE}$version${reset}\n"
 fi
 exit
 }
@@ -162,7 +164,7 @@ exit
 case $1 in
   --help|-\?) XHELP
   ;;
-  --checkupdate) UPDATE
+  --update) UPDATE
   ;;
 esac
 
