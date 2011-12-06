@@ -1,0 +1,104 @@
+#!/bin/bash
+# notify-send_sshd v0.0.1 last mod 2011/12/06
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2011 Ryan Sawhill <ryan@b19.org>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#-------------------------------------------------------------------------------
+# Run this as whatever user is logged in to your desktop environment. Run it via
+# a shortcut or your file manager or in a terminal. It needs to read the logfile
+# /var/log/secure in order to display notifications when people log in (or try
+# to log in). To accomplish this it will check for sudo rights if you're in a
+# terminal; otherwise it will try to use a gui su app (like beesu) for auth. If
+# that doesn't work, it prints an informative message tell you some different
+# routes you could go to accomplish this. My favorite way:
+#     setfacl -m u:$USER:r /var/log/secure
+# That way you don't have to configure sudo or type a password each time.
+#
+# Note: I kept things extremely modular -- it would be pretty simple to tweak
+# this for watching a different log file (or multiple files at once).
+# Feedback welcome. Contact info above.
+#-------------------------------------------------------------------------------
+
+zero=${0##*/}
+exec 2>/dev/null
+
+#===============================================================================
+#------------------------------------------- CHECK PRE-REQS, CONFIGURE ENV ---->
+
+command -v notify-send >/dev/null || { echo -e "ERROR\nThe purpose of this script is to use the 'notify-send' utility to display gui\nnotifications for sshd activity.\nnotify-send does not appear to be installed on your system."; exit 255; }
+
+[[ -z $DISPLAY ]] && { echo -e "ERROR\n\$DISPLAY not set. Simply put, you must run this from a terminal or shortcut in\nyour desktop environment."; exit 200; }
+
+# Shutdown any other copies of the script that are being run by our user
+lockfile=/dev/shm/$zero.lock_$USER
+trap "rm $lockfile" EXIT
+set -o noclobber
+if >$lockfile; then
+  set +o noclobber
+else
+  killall -u $USER --older-than 4s -s KILL $zero
+  set +o noclobber
+  >$lockfile
+fi
+
+# Variables--don't actually need to unset them in our case, but it's a good habit
+unset logfile tail_log Gsu tstamp ip prev_ip msg prev_msg i
+
+logfile=/var/log/secure
+
+# If we can read /var/log/secure, then our command is simple
+if [[ -r $logfile ]]; then
+  tail_log="tail -fn0 $logfile"
+  
+else # Otherwise, we need to figure out how we're going to get privileges
+  # If we're on a tty and sudo tail can be run, use that
+  if sudo -l tail -fn0 /var/log/secure >/dev/null; then
+    tail_log="sudo tail -fn0 $logfile"
+
+  else # Else, try to use a gui su program
+    for Gsu in beesu kdesu gksu ktsuss NO_Gsu; do command -v $Gsu >/dev/null && break ; done
+    [[ $Gsu != NO_Gsu ]] && tail_log="$Gsu tail -fn0 $logfile"
+  fi
+fi
+
+# If the gui su thing didn't pan out, time to throw an error
+[[ -z $tail_log ]] &&
+  { notify-send -u critical "$zero: Error - Couldn't open $logfile" "OPTIONS:\n(1) Run 'setfacl -m u:$USER:r $logfile' as root, giving $USER the permanent ability to read it\n(2) Configure sudo so $USER can run '/usr/bin/tail -fn0 $logfile', preferably with NOPASSWD\n(3) Install beesu, kdesu, or gksu so $zero can use them to authenticate you as root from a desktop session"; exit 101; }
+
+
+#===============================================================================
+#------------------------------------------------------- KICK OFF THE LOOP ---->
+
+# Here we go....
+$tail_log |
+
+  grep --line-buffered 'sshd.*Accepted\|sshd.*Failed' |
+
+    while read line; do
+
+      tstamp=${line/ $(hostname)*/}
+      prev_ip=$ip; ip=${line#*from }; ip=${ip% port*}
+      prev_msg=$msg; msg=${line#*]: }
+
+      if [[ ${msg%% *} = Failed && ${prev_msg% port*} = ${msg% port*} && $prev_ip = $ip && $i -ne 3 ]]; then
+        i=$(($i+1))
+        [[ $i -eq 3 ]] &&
+          { i=0 ; notify-send -u critical "sshd: 3 more failed login attempts by $ip" "Data for latest occurence:\n[$tstamp]\n$msg" ;}
+      else
+        i=0
+        case ${msg%% *} in
+          Accepted) notify-send -u critical "sshd: New session initiated by $ip" "[$tstamp]\n$msg" ;;
+          Failed)   notify-send -u critical "sshd: Failed login attempt by $ip" "[$tstamp]\n$msg" ;;
+        esac
+      fi
+    done
+
