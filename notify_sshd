@@ -56,14 +56,14 @@ command -v notify-send >/dev/null || {
   exit $e_NO_DISPLAY ;}
 
 # Shutdown any other copies of the script that are being run by our user
-lockfile=/dev/shm/$zero.lock_$USER
+lock=$HOME/.$zero.lock
 set -o noclobber
-if ! echo $$ >$lockfile; then
-  kill -0 $(<$lockfile) && kill $(<$lockfile) || rm $lockfile
+if ! echo $$ >$lock; then
+  kill -0 $(<$lock) && kill $(<$lock) || rm $lock
   sleep 1
-  echo $$ >$lockfile || exit $e_LOCKING_RACE_CONDITION
+  echo $$ >$lock || exit $e_LOCKING_RACE_CONDITION
 fi
-trap "rm $lockfile" EXIT
+trap "rm $lock" EXIT
 set +o noclobber
   
 # Variables--don't actually need to unset most of them, but it's a good habit
@@ -154,7 +154,7 @@ $tail_log |
 #===============================================================================
 #---------------------------------------------------------------- REACTING ---->
 # This section checks to make sure we successfully started a tail on $logfile
-# It also ensures we shut down if our lockfile disappears or gets co-opted
+# It also ensures we shut down if our lock disappears or gets co-opted
 # (DEBUG) #ps --no-header -o pid,args -C tail; ps --no-header --ppid $$ -o pid,args
 
 # If we're using sudo with a password, or one of the gui su apps, we need to give the user some time before we check up on tail
@@ -162,18 +162,18 @@ $tail_log |
 
 # Confirm that a tail has been started, print success or fail notification
 if ps --no-header -o args -C tail | grep -q -- "^tail -fn0 --pid=$$"; then :
-  notify-send "$zero" "Monitoring of $logfile successfully initiated."
+  notify-send "$zero: $logfile" "Successfully initialized monitoring & notification process. If you didn't start $zero from a terminal and you find you want to shut it down at some point, deleting $lock will cause it to quit cleanly within 60s."
 else
-  notify-send -u critical "$zero ERROR" "There was an error initializing monitoring process of $logfile and $zero shut down. You can try running $0 from a terminal after commenting out the first non-comment line ('exec 2>/dev/null') to see if there are any instructive errors."
+  notify-send -u critical "$zero ERROR" "There was an error initializing $logfile monitoring process and $zero shut down. You can try running $0 from a terminal after commenting out the first non-comment line ('exec 2>/dev/null') to see if there are any instructive errors."
   exit $e_FAILED_TO_START_TAIL
 fi
 
-# Insurance against a runaway process; as long as the lockfile describes us, stay alive
-while [[ $$ = $(<$lockfile) ]]; do
+# Insurance against a runaway process; as long as the lock describes us, stay alive
+while [[ $$ = $(<$lock) ]]; do
   sleep 2m
 done
 
-# Once the lockfile no longer describes us, remove our exit trap and quit
+# Once the lock no longer describes us, remove our exit trap and quit
 trap EXIT
 exit $e_SUICIDE
 
