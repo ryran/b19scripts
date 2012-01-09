@@ -2,7 +2,8 @@ Various examples of BASH scripting funness.
 Some are extremely functional and maybe even slightly original, whereas others
 are simply meant to be instructional (I used to teach Red Hat classes). This is
 where all my scripts start, but the best ones end up in their own repo,
-like https://github.com/ryran/a7crypt and https://github.com/ryran/hhwchk.
+like http://github.com/ryran/a7crypt, http://github.com/ryran/hhwchk, and
+http://github.com/ryran/tail2notify.
 
 Hit me up any time about anything:
-ryan @ b19 . org
+ryan [@] b19 {.} org
