@@ -1,0 +1,145 @@
+#!/usr/bin/env python2
+#
+# Last file mod: 2012/02/21
+# Latest version at <http://github.com/ryran>
+# Copyright 2012 Ryan Sawhill <ryan@b19.org>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#------------------------------------------------------------------------------
+
+import random
+import os
+import argparse
+from textwrap import dedent
+
+progname='randrename'
+
+parser = argparse.ArgumentParser(
+    prog=progname,
+    description=dedent("""
+        Insert random numbers into filenames or replace filenames with random numbers,
+        optionally stripping characters from the beginning or end of said filenames.
+        """),
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog=dedent("""
+        ins-pos may be specified as (examples):
+           0  rand num will be inserted at beginning of filename
+           2  rand num will be inserted after the 2nd character of filename
+          -1  rand num will be inserted after the last char of filename
+          -3  rand num will be inserted after the 3rd from last char of filename
+        
+        NOTES:
+          All operations (e.g. ins-pos, crop-right, and kill-name) are performed on the
+          name of FILE sans its file extension. Use ignore-ext to change this behavior.
+          
+          If kill-name is specified, ins-pos, left-strip, & crop-right will all be
+          ignored (if they're specified).
+          
+          Lastly, if any cropping is requested, it will be performed before the random
+          number (+ any specified separator chars) are inserted into the filename.
+        
+        EXAMPLES:
+                [EXAMPLE CMD]                   [POSSIBLE OUTPUT]
+          {prog} toaster.mp3            ==> '71toaster.mp3'
+          {prog} -s '. ' toaster.mp3    ==> '20. toaster.mp3'
+          {prog} -i1 toaster.mp3        ==> 't66oaster.mp3'
+          {prog} -i-1 -S_ toaster.mp3   ==> 'toaster_24.mp3'
+          {prog} -d3 -s. toaster.mp3    ==> '395.toaster.mp3'
+          {prog} -d4 -k 01.bak          ==> '8353.bak'
+          {prog} -d4 -kx 01.bak         ==> '7279'
+          {prog} -l2 -r1 01-AB.mp3 02-ZX.mp3.zip  ==> '50-A.mp3' '38-ZX.mp.zip'
+        """.format(prog=progname)))
+
+parser.add_argument('filenames', metavar='FILE', nargs='+',
+                    help="file(s) to operate on")
+parser.add_argument('-i', '--ins-pos', metavar='N', type=int, default=0,
+                    help="position in filename to insert rand num (default: 0)")
+parser.add_argument('-d', '--num-digits', metavar='N', type=int, default=2,
+                    help="num of digits to use for rand num range (default: 2)")
+parser.add_argument('-S', '--lsep', metavar='C', default='',
+                    help="separator char(s) to prefix the random number with")
+parser.add_argument('-s', '--rsep', metavar='C', default='',
+                    help="separator char(s) to append to the random number")
+parser.add_argument('-l', '--lstrip', metavar='N', type=int, default=0,
+                    help="number of chars to strip from beginning of filename")
+parser.add_argument('-r', '--rstrip', metavar='N', type=int, default=0,
+                    help="number of chars to strip from end of filename")
+parser.add_argument('-w', '--wstrip', action='store_true', default=False,
+                    help="strip whitespace from beginning/end of filename")
+parser.add_argument('-k', '--kill-name', action='store_true', default=False,
+                    help="remove filename completely (excluding extension)")
+parser.add_argument('-x', '--ignore-ext', action='store_true', default=False,
+                    help="disable special treatment of file extensions (e.g. if used with --kill-name, extension is removed as well)")
+args = parser.parse_args()
+
+# Figure out high range for random number generation, based on num-digits arg
+rand_max = 0
+for n in xrange(args.num_digits):
+    if rand_max == 0:   rand_max = '9'
+    else:               rand_max += '9'
+rand_max = int(rand_max)
+
+# Need to tweak this a little to make it optional
+if args.rstrip == 0:
+    args.rstrip = None
+elif args.rstrip > 0:
+    args.rstrip = args.rstrip.__neg__()        
+
+# Process each file
+for fin in args.filenames:
+    
+    # Skip to the next file if no write permission on file
+    if not os.path.isfile(fin):
+        print("FILE {!r} not found".format(fin))
+        continue
+    elif not os.access(fin, os.W_OK):
+        print("No write permission for FILE {!r}".format(fin))
+        continue
+    
+    # Split the path from the actual filename
+    head, tail = os.path.split(fin)
+    
+    # Split filename and extension, unless ignore-ext opt provided
+    if args.ignore_ext:
+        filename = tail
+        ext = ''
+    else:
+        filename, ext = os.path.splitext(tail)
+    
+    # Generate random number, zero-filled and prefix/append separator char(s)
+    num = args.lsep + str(random.randint(0,rand_max)).zfill(args.num_digits) + args.rsep
+    
+    # Replace filename with random num or insert rand num into filename
+    if args.kill_name:
+        filename = num
+    else:
+        if args.wstrip:
+            # Strip leading/trailing whitespace if requested
+            filename = filename.strip()
+            ext = ext.strip()
+        # Strip num of chars from left & right
+        filename = filename[args.lstrip:]
+        filename = filename[:args.rstrip:]
+        
+        # Insert random number at proper position
+        if args.ins_pos < 0:
+            # If negative index, need to modify it
+            args.ins_pos = len(filename) + args.ins_pos + 1
+        filename = filename[:args.ins_pos] + num + filename[args.ins_pos:]
+    
+    # Join file path, name, & extension
+    fout = os.path.join(head, filename + ext)
+    
+    # Rename!
+    print("Renaming: {!r}  ==>  {!r}".format(fin, fout))
+    os.rename(fin, fout)
+    
+    
