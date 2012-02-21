@@ -19,6 +19,7 @@ import random
 import os
 import argparse
 from textwrap import dedent
+from sys import stderr
 
 progname='randrename'
 
@@ -68,9 +69,9 @@ parser.add_argument('-S', '--lsep', metavar='C', default='',
                     help="separator char(s) to prefix the random number with")
 parser.add_argument('-s', '--rsep', metavar='C', default='',
                     help="separator char(s) to append to the random number")
-parser.add_argument('-l', '--lstrip', metavar='N', type=int, default=0,
+parser.add_argument('-l', '--lstrip', metavar='N', type=int, default=None,
                     help="number of chars to strip from beginning of filename")
-parser.add_argument('-r', '--rstrip', metavar='N', type=int, default=0,
+parser.add_argument('-r', '--rstrip', metavar='N', type=int, default=None,
                     help="number of chars to strip from end of filename")
 parser.add_argument('-w', '--wstrip', action='store_true', default=False,
                     help="strip whitespace from beginning/end of filename")
@@ -80,66 +81,78 @@ parser.add_argument('-x', '--ignore-ext', action='store_true', default=False,
                     help="disable special treatment of file extensions (e.g. if used with --kill-name, extension is removed as well)")
 args = parser.parse_args()
 
-# Figure out high range for random number generation, based on num-digits arg
-rand_max = 0
-for n in xrange(args.num_digits):
-    if rand_max == 0:   rand_max = '9'
-    else:               rand_max += '9'
-rand_max = int(rand_max)
 
-# Need to tweak this a little to make it optional
-if args.rstrip == 0:
-    args.rstrip = None
-elif args.rstrip > 0:
-    args.rstrip = args.rstrip.__neg__()        
-
-# Process each file
-for fin in args.filenames:
-    
-    # Skip to the next file if no write permission on file
-    if not os.path.isfile(fin):
-        print("FILE {!r} not found".format(fin))
-        continue
-    elif not os.access(fin, os.W_OK):
-        print("No write permission for FILE {!r}".format(fin))
-        continue
-    
+def get_path_components(fin, ignore_extension=False):
+    """Break filename into component parts, i.e. path, filename, extension."""
     # Split the path from the actual filename
     head, tail = os.path.split(fin)
-    
-    # Split filename and extension, unless ignore-ext opt provided
-    if args.ignore_ext:
+    # Split filename and extension, unless ignoring extension
+    if ignore_extension:
         filename = tail
         ext = ''
     else:
         filename, ext = os.path.splitext(tail)
+    return head, filename, ext
+
+
+def generate_randint(num_digits, end):
+    """Generate num_digits-long zero-filled random integer between 0 & end."""
+    return str(random.randint(0, end)).zfill(num_digits)
+
+
+def update_filename(args, filename, ext, random_num):
+    """Munge filename (& potentially extension), dependent on options in args namespace."""
+    if args.wstrip:
+        # Strip leading/trailing whitespace if requested
+        filename = filename.strip()
+        ext = ext.strip()
+    # Strip num of chars from left & right
+    filename = filename[args.lstrip:]
+    filename = filename[:args.rstrip]
+    # Insert random number at proper position
+    if args.ins_pos < 0:
+        # If negative index, need to modify it
+        args.ins_pos = len(filename) + args.ins_pos + 1
+    # Insert random_num into filename at proper index
+    filename = filename[:args.ins_pos] + random_num + filename[args.ins_pos:]
+    return filename, ext
+
+
+# If negative num-digits supplied, flip the sign
+if args.num_digits < 0:  args.num_digits *= -1
+
+# Calculate high end of random number generation range
+rand_max = 10 ** args.num_digits - 1
+
+# If right-strip was supplied, convert it to negative
+if args.rstrip > 0:  args.rstrip *= -1
+
+
+# Process each file
+for fin in args.filenames:
     
-    # Generate random number, zero-filled and prefix/append separator char(s)
-    num = args.lsep + str(random.randint(0,rand_max)).zfill(args.num_digits) + args.rsep
+    # Split fin into component parts
+    head, filename, ext = get_path_components(fin, args.ignore_ext)
+    
+    # Prefix/append separator char(s) to random number
+    num = args.lsep + generate_randint(args.num_digits, rand_max) + args.rsep
     
     # Replace filename with random num or insert rand num into filename
     if args.kill_name:
         filename = num
     else:
-        if args.wstrip:
-            # Strip leading/trailing whitespace if requested
-            filename = filename.strip()
-            ext = ext.strip()
-        # Strip num of chars from left & right
-        filename = filename[args.lstrip:]
-        filename = filename[:args.rstrip:]
+        filename, ext = update_filename(args, filename, ext, num)
         
-        # Insert random number at proper position
-        if args.ins_pos < 0:
-            # If negative index, need to modify it
-            args.ins_pos = len(filename) + args.ins_pos + 1
-        filename = filename[:args.ins_pos] + num + filename[args.ins_pos:]
-    
     # Join file path, name, & extension
     fout = os.path.join(head, filename + ext)
     
     # Rename!
-    print("Renaming: {!r}  ==>  {!r}".format(fin, fout))
-    os.rename(fin, fout)
-    
-    
+    try:
+        os.rename(fin, fout)
+    except OSError as error:
+        stderr.write("Error renaming FILE {!r}: {}\n".format(fin, error[1]))
+    except:
+        raise
+    else:
+        print("Renamed: {!r}  ==>  {!r}".format(fin, fout))
+
