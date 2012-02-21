@@ -107,14 +107,14 @@ def update_filename(args, filename, ext, random_num):
         filename = filename.strip()
         ext = ext.strip()
     # Strip num of chars from left & right
-    filename = filename[args.lstrip:]
-    filename = filename[:args.rstrip]
-    # Insert random number at proper position
+    filename = filename[args.lstrip:args.rstrip]
+    # If negative index, need to modify it
     if args.ins_pos < 0:
-        # If negative index, need to modify it
-        args.ins_pos = len(filename) + args.ins_pos + 1
+        index = len(filename) + args.ins_pos + 1
+    else:
+        index = args.ins_pos
     # Insert random_num into filename at proper index
-    filename = filename[:args.ins_pos] + random_num + filename[args.ins_pos:]
+    filename = filename[:index] + random_num + filename[index:]
     return filename, ext
 
 
@@ -151,8 +151,6 @@ for fin in args.filenames:
         os.rename(fin, fout)
     except OSError as error:
         stderr.write("Error renaming FILE {!r}: {}\n".format(fin, error[1]))
-    except:
-        raise
     else:
         print("Renamed: {!r}  ==>  {!r}".format(fin, fout))
 
