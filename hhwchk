@@ -1,7 +1,7 @@
 #!/bin/bash
-# hhwchk v2.09f last mod 2011/12/04
+# hhwchk v2.14 last mod 2012/07/09
 # Latest version at <http://github.com/ryran/hhwchk>
-# Copyright 2010, 2011 Ryan Sawhill <ryan@b19.org>
+# Copyright 2010, 2011, 2012 Ryan Sawhill <rsaw@redhat.com>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -41,7 +41,7 @@
 # out all the wonders of this new and complicated (*ahem* .. to me) language.
 # Hopefully this will continue to evolve in efficiency as my knowledge expands,
 # but to move that process along quicker, send any ideas for ways to improve
-# things to me at <ryan@b19.org>. I've been meaning to get into python as well
+# things to me at <rsaw@redhat.com>. I've been meaning to get into python as well
 # actually, so if you're looking at this mess and thinking "WOW this would be so
 # much better in XYZ LANGUAGE", hit me up and let me know.
 #
@@ -107,7 +107,7 @@ Examples:
   hhwchk -P root@station -S .example.com -v 5 6 7
 
 Version info: $version
-Report bugs or suggestions to <ryan@b19.org>
+Report bugs or suggestions to <rsaw@redhat.com>
 Or see <github.com/ryran/hhwchk> for bug tracker & latest version
 Alternatively, run hhwchk with '--update'"
 exit
@@ -235,12 +235,41 @@ trap "rm $cmdscript" EXIT
 
 [[ $bios = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
-if `command -v dmidecode` >/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
-  dmi=yes
-  BIOS_phys_num_cpu="[bios: phys_cpus=$(dmidecode -s processor-family | wc -l), "
-  BIOS_cpu_cores=$(dmidecode -t processor | awk '/Core Count/{totalcores+=$3;percpucores=$3}END{print "cores/cpu="percpucores", total_cores="totalcores"]"}')
-  BIOS_model_cpu=$(echo "[`dmidecode -s processor-manufacturer|sort -u` `dmidecode -s processor-family|sort -u` @ `dmidecode -s processor-frequency|sort -u` <--says bios]")
-  BIOS_ram=$(dmidecode -t memory|awk '/^[[:space:]]Size: [[:digit:]]/{numdims+=1;ram=$2;sumram+=ram}END{print "["numdims" DIMMs, "sumram" MB actual]"}')
+if [[ $UID -eq 0 ]] && command -v dmidecode >/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
+
+dmi=yes
+BIOS_sysinfo="$(dmidecode -s system-manufacturer) $(dmidecode -s system-product-name)"
+BIOS_model_cpu="<bios: $(dmidecode -s processor-manufacturer|sort -u) \
+$(dmidecode -s processor-family|sort -u) @ $(dmidecode -s processor-frequency|sort -u)>"
+BIOS_cpu_count_info=$(dmidecode -t4 |
+awk '
+    /Status:/ {
+        numsocks++; if ($2 ~ /Populated/) popsocks++
+    }
+    /Core Count:/ {
+        corespercpu=$3; totalnumcores+=$3
+    }
+    END {
+        printf "<bios: %d of %d sockets populated, with %d cores/cpu, %d total cores>\n",
+            popsocks, numsocks, corespercpu, totalnumcores
+    }'
+)
+BIOS_ram=$(dmidecode -t memory|
+awk '
+  /Size:/ {
+      numdimmslots++
+      if ($2 ~ /^[[:digit:]]/) {
+          popdimms++; sumram+=$2
+      }
+  }
+  /Maximum Capacity:/ {
+      maxram = $3" "$4
+  }
+  END {
+      printf "<bios: %d MB total, %d of %d DIMMs populated (%s max capacity)>\n",
+          sumram, popdimms, numdimmslots, maxram
+  }'
+)
 else
   unset dmi
 fi
@@ -248,60 +277,168 @@ EOF
 
 [[ $hostname = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
+
                  echo -e "HOST: $(uname -nr)"
+                 [[ -n $dmi ]] && echo -e "  ${BIOS_sysinfo}"
 EOF
 
+# What will hopefully (eventually) be a much more efficient version of the cpu code
+cat >/dev/null <<\EOF
+[[ $cpu = y || $verbose = y ]] &&
+#cat >> $cmdscript <<\EOF
+cpu1=$(
+awk -F: '
+  /model name/ {
+      sub("(R)", ""); sub("(TM)", "")
+      numcpus++
+  }
+  /physical id/ {
+      physcpu[$2]++
+  }
+  /pae|lm|vmx|svm|ht/ {
+      
+
+  END {
+      printf "CPU: %d logical cpus (%s)\n", numcpus, flags
+      printf "  
+  }'
+
+
+)
+
+EOF
+
+#ORIGINAL CPU VERSION
 [[ $cpu = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
+
 model_cpu=$(awk -F: '/model name/{print$2}' /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
+
 num_cpu=$(grep processor /proc/cpuinfo | sort -u | wc -l)
+
 num_cpu_phys=$(grep "physical id" /proc/cpuinfo | sort -u | wc -l)
+
 [[ $num_cpu_phys -eq 0 ]] && num_cpu_phys=$num_cpu
+
 if [[ $num_cpu_phys -ne $num_cpu ]]; then
   num_cores_per_cpu=$(grep cores /proc/cpuinfo|head -n1|awk {print\$4})
   [[ -n $num_cores_per_cpu ]] && cores=", ${num_cores_per_cpu} cores/ea"
 fi
-cpu_flags=$(egrep -o "pae|lm|vmx|svm" /proc/cpuinfo|sort -u|xargs echo|sed "s/ /,/g")
-                 echo -e "CPU: ${num_cpu} logical cpus; flags=${cpu_flags}"
+
+cpu_flags=$(egrep -o "pae|lm|vmx|svm|ht" /proc/cpuinfo|sort -u|xargs echo|sed "s/ /,/g")
+
+                 echo -e "CPU: ${num_cpu} logical cpus (${cpu_flags})"
                  echo -e "  ${num_cpu_phys}${model_cpu}${cores}"
                  [[ -n $dmi ]] && echo -e "  ${BIOS_model_cpu}"
-                 [[ -n $dmi ]] && echo -e "  ${BIOS_phys_num_cpu}${BIOS_cpu_cores}"
+                 [[ -n $dmi ]] && echo -e "  ${BIOS_cpu_count_info}"
 
 EOF
 
 [[ $ram = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
-sum_ram=$(free -m | awk /^Mem:/{print\$2})
-                 echo -e "RAM: ${sum_ram} MB"
+sum_ram=$(free -m | awk '/^Mem:/ {printf "%s MB (%.1f GB)\n", $2, $2/1024}')
+
+                 echo -e "RAM: ${sum_ram}"
                  [[ -n $dmi ]] && echo -e "  ${BIOS_ram}"
 EOF
 
 [[ $disks = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
 if [[ $UID -eq 0 ]]; then
-  hdds=$(fdisk -l 2>/dev/null | awk '/^Disk.*[vsh]d.|^Disk.*xvd./ {NUMDISKS++; BYTES+=$5; DISK[$2]=$3" "$4} END {GBYTES=BYTES/1024/1024/1024; printf GBYTES" GB total, "NUMDISKS" disks\n"; for (i in DISK) print i,DISK[i]}' | sed -e "s@/dev/@  @" -e "s/,$//" -e "s/://")
+hdds=$(
+fdisk -l /dev/[vsh]d? /dev/xvd? 2>/dev/null |
+awk '
+  /^Disk \// {
+      sub("/dev/", ""); sub(":", ""); sub(",", "")
+      numdisks++
+      sumbytes+=$5
+      disk[$2]=$3" "$4
+  }
+  END {
+      gb = sumbytes/1024/1024/1024
+      tb = gb/1024
+      printf "%d totaling %.1f GB (%.2f TB)\n", numdisks, gb, tb
+      for (i in disk) printf "  %s %s\n", i, disk[i]
+  }'
+)
+
                  echo -e "DISKS: ${hdds}"
 fi
 EOF
 
 [[ $net = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
-lspci_netdevs=$(lspci | awk -F: '/Net|Eth/{print$3}' | sed -e "s/ (rev.*//" -e "s/^/ /")
+lspci_netdevs=$(lspci |
+awk '
+    $2 !~ /^Eth|^Net/ {
+        next
+    }
+    {
+        split($1, slot, ":");
+        $1 = "";
+        sub(" ", ""); split($0, type, ":");
+        iface[type[2]]++;
+        if (!(slot[1] SUBSEP type[2] in slots)) {
+            slots[slot[1], type[2]];
+            slotcount[type[2]]++
+        }
+    }
+    END {
+        for (ifacetype in iface) {
+            slotc = slotcount[ifacetype];
+            typec = iface[ifacetype]
+            ports = "";
+            if (typec > 1) {
+                ports = "  {" slotc " x " typec/slotc "-port}"
+            };
+            printf "  %s%s%s\n", typec, ifacetype, ports
+        }
+    }'
+)
+
                  echo -e "NET:\n${lspci_netdevs}"
 EOF
 
 [[ $ethtool = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
 if command -v ethtool >/dev/null && [[ $UID -eq 0 ]]; then
-  ethdevs=$(ifconfig | awk '/^peth|^eth|^em|^wlan|^usb/{print$1}' | grep -v :)
-  ethtool_linkinfo=$(for i in $ethdevs;do echo -e "  $i\tlink=$(ethtool $i|awk '/Link detected:/{print$3}')$(spd=$(ethtool $i|awk '/Speed: 1/{print$2}');[[ -n $spd && $spd != Unknown! ]] && echo ", speed=$spd")";done)
+
+ethdevs=$(ip link | awk -F: '/ peth| eth| em| wlan| usb/{print$2}')
+ethtool_linkinfo=$(
+for i in $ethdevs; do echo -e "\
+  $i\t$(ethtool $i |
+awk '
+  /Link detected:/    { link = $3; sub(/yes/, "UP", link); sub(/no/, "DOWN", link) }
+  /Speed:/            { spd = $2 }
+  /Duplex:/           { dup = tolower($2) }
+  /Auto-negotiation:/ { aneg = $2; sub(/on/, "Y", aneg); sub(/off/, "N", aneg) }
+  END {
+      if (link == "UP" && spd != "")
+          linkdetails = " ("spd" "dup" [autoneg="aneg"])"
+      printf "link=%s%s", link, linkdetails
+  }'
+) \t$(ethtool -i $i |
+awk '
+  BEGIN {
+      driver="UNKNOWN DRIVER"; drv_vers="NULL"; fw_vers="NULL"
+  }
+  /^driver:/           { if ($2 != "") driver=$2 }
+  /^version:/          { if ($2 != "") drv_vers=$2 }
+  /^firmware-version:/ { if ($2 != "") fw_vers=$2 }
+  END {
+      printf "{ %s ver %s / fw %s }\n", driver, drv_vers, fw_vers
+  }'
+)"
+done)
+
                  echo -e "${ethtool_linkinfo}"
 fi
 EOF
 
 [[ $graphics = y || $verbose = y ]] &&
 cat >> $cmdscript <<\EOF
-lspci_vga=$(lspci | awk -F: /VGA/{print\$3} | sed -e "s/ (rev.*//" -e "s/^/ /")
+lspci_vga=$(lspci | awk -F: '/VGA/{print " "$3}')
+
                  echo -e "VGA:\n${lspci_vga}"
 EOF
 
@@ -313,8 +450,9 @@ EOF
 # what to do if no other display options are used
 [[ $opts = n ]] &&
 cat > $cmdscript <<\EOF
-if `command -v dmidecode` >/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
-  BIOS_ram=$(dmidecode -t memory|awk '/Size: [[:digit:]]/{numdims+=1;ram=$2;sumram+=ram}END{print "("sumram" MB actual)"}')
+if [[ $UID -eq 0 ]] && command -v dmidecode >/dev/null && ! dmidecode -t memory|grep -q "table is broken"; then
+  BIOS_ram=$(dmidecode -t memory|awk '/Size: [[:digit:]]/{sumram+=$2} END {printf "<bios: %s MB>", sumram}')
+  BIOS_sysinfo="$(dmidecode -s system-manufacturer) $(dmidecode -s system-product-name)"
 fi
 
 model_cpu=$(awk -F: '/model name/{print$2}' /proc/cpuinfo | sort -u | sed -e "s/(R)//g" -e "s/(TM)//g" -e "s/  */ /g")
@@ -325,16 +463,17 @@ if [[ $num_cpu_phys -ne $num_cpu ]]; then
   num_cores_per_cpu=$(grep cores /proc/cpuinfo|head -n1|awk {print\$4})
   [[ -n $num_cores_per_cpu ]] && cores=", ${num_cores_per_cpu} cores/ea"
 fi
-cpu_flags=$(egrep -o pae\|lm\|vmx\|svm /proc/cpuinfo|sort -u|xargs echo|sed s/\ /,/g)
+cpu_flags=$(egrep -o 'pae|lm|vmx|svm|ht' /proc/cpuinfo|sort -u|xargs echo|sed s/\ /,/g)
+sum_ram=$(free -m | awk '/^Mem:/ {printf "%s MB (%.1f GB)\n", $2, $2/1024}')
+[[ $UID -eq 0 ]] && hdds=$(fdisk -l /dev/[vsh]d? /dev/xvd? 2>/dev/null| awk -F, '/^Disk \//{print$1}' | sed -e "s@/dev/@@" -e "s/Disk/DISK/")
 
-sum_ram=$(free -m | awk /^Mem:/{print\$2})
-hdds=$(fdisk -l 2>/dev/null| awk -F, '/^Disk.*[vsh]d.|^Disk.*xvd./{print$1}' | sed -e "s@/dev/@@" -e "s/Disk/DISK/")
 
-                 echo "${num_cpu_phys}${model_cpu}${cores}"
-                 echo "  (${num_cpu} logical cpus; flags=${cpu_flags})"
-                 echo "RAM: ${sum_ram} MB ${BIOS_ram}"
-                 echo "${hdds}"
-[[ $UID -ne 0 ]] && echo -e "Some information could not be displayed! Root-access required!"
+[[ -n $BIOS_sysinfo ]] && echo "${BIOS_sysinfo}"
+echo "${num_cpu_phys}${model_cpu}${cores}
+  (${num_cpu} logical cpus; flags:${cpu_flags})
+RAM: ${sum_ram} ${BIOS_ram}"
+[[ $UID -eq 0 ]] && echo "${hdds}" ||
+echo "Some information could not be displayed! Root-access required!"
 EOF
 
 #-------------------------------------------------------------------------------
