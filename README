@@ -1,0 +1,39 @@
+Hops into systems via ssh to check out what they have in the way of hardware.
+
+When I started this script with the name host-hwcheck, I began with a simple
+purpose: I wanted to be able to quickly gather information about a handful of
+systems that I had been handed root access to -- specifically in a classroom
+environment where it was important that the students' systems be relatively
+uniform. Since my first days with linux I've been pretty handy with bash and
+so it never was much work to use for-loops along with ssh, but you know what
+they say about things that you have to do more than once, let alone every
+single week...
+
+So the initial goal was to display info on number of processors and their
+capabilities, plus amount of ram and disk space and I wanted to be able to
+do this on remote systems without requiring the script to reside on those
+systems as well.
+Right from the start I also wanted to be able to use number generation ('seq'
+or '{n..n}') for hostnames, along with some other configurable prefix like
+'station' -- I don't know of a quick and elegant way to do this with bash
+trickery, so that was also part of it.
+
+Over the course of a month and a half, it evolved and vastly improved, with a
+small sacrifice in efficiency. This also prompted my first bit of self-study
+into awk, which I had only ever used for simply pulling out a column in text.
+I'm definitely still learning on that front -- you'll see me resort to piping
+almost-baked awk-output into sed or other commands because I haven't figured
+out all the wonders of this new and complicated (*ahem* .. to me) language.
+Hopefully this will continue to evolve in efficiency as my knowledge expands,
+but to move that process along quicker, send any ideas for ways to improve
+things to me at <ryan@b19.org>. I've been meaning to get into python as well
+actually, so if you're looking at this mess and thinking "WOW this would be so
+much better in XYZ LANGUAGE", hit me up and let me know.
+
+Notes:
+This script doesn't use absolute paths for cmd names; however there is some
+error-checking to account for the following commands being missing:
+  dmidecode, ethtool
+There is no error-checking for anything else, so standard coreutils and the
+util-linux-ng commands must be available via $PATH, plus the following:
+  gawk, xargs, sed, lspci
