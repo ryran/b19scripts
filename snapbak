@@ -155,7 +155,7 @@ virsh dumpxml $VirtGuestName >$XML
 # Detect source logical volume
 if [[ -n $StorageDeviceLV ]]; then
   # If blockdev name was explicitly specified, look for that or that-snap
-  CurrentStorage=$(egrep "source dev='${StorageDeviceLV}('|-snap')" $XML | awk -F\' 'NR<2 {print $2}')
+  CurrentStorage=$(egrep "source dev='${StorageDeviceLV}(-snap)?'" $XML | awk -F\' 'NR<2 {print $2}')
   # Exit if we didn't find the requested logical volume
   if [[ -z $CurrentStorage ]]; then
     Print "Error: Specified StorageDeviceLV '$StorageDeviceLV' not found as storage for guest '$VirtGuestName'"
