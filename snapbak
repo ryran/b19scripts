@@ -1,0 +1,248 @@
+#!/bin/bash
+# snapbak v0.0.4 last mod 2013/03/08
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2013 Ryan Sawhill <rsaw@redhat.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#
+#-------------------------------------------------------------------------------
+
+# Auto-detect program-name from filename
+pzero=snapbak
+
+# Get version from line #2
+version=$(sed '2q;d' $0)
+
+# Default COW size, overridden by cmdline-opts
+SnapshotCOWSize=3G
+
+# No default sourcedev name
+StorageDeviceLV=
+
+# Colors
+B='\033[1;1m'  # bold
+R='\033[0;0m'  # reset
+
+Wait_Shutdown() {
+  # Shutdown guest passed as first argument
+  echo -e "\nShutting down guest '$1' ..."
+  virsh shutdown $1 &>/dev/null
+  until [[ $(virsh domid $1) == - ]]; do
+    echo "Waiting for guest to shut down gracefully ..."
+    sleep 2
+  done
+}
+
+Wait_Destroy() {
+  # Destroy guest passed as first argument
+  echo -e "\nForcefully terminating guest '$1' ..."
+  virsh destroy $1 &>/dev/null
+  until [[ $(virsh domid $1) == - ]]; do
+    echo "Waiting for guest to terminate ..."
+    sleep 2
+    virsh destroy $1 &>/dev/null
+  done
+}
+
+Print() {
+  printf "${B}";  fold -sw100 <<<"$@" | sed '1!s/^/  /';  printf "${R}"
+}
+
+Prompt() {
+  local REPLY
+  read -p "$@ "
+  [[ $REPLY != y ]] && { echo Aborting; exit; }
+}
+
+# Help page
+Help_Usage() {
+  echo -e "Usage: ${B}$pzero [OPTIONS] <VirtGuestName>${R}
+Run against a KVM guest that has LVM logical volumes for storage
+
+${B}VirtGuestName${R} must be one of the names returned by ${B}virsh list --all${R}
+
+$pzero will abort if a guest's storage is not a logical volume; otherwise it
+will auto-detect whether the logical volume is a snapshot
+
+ • If guest is using an LV snapshot for storage, $pzero can recreate a fresh
+   snapshot from the origin (and reset the guest) OR, if using the ${B}--merge${R}
+   option, the guest will be shutdown and the current snapshot will be merged
+   into the origin (after which point a new snapshot will be taken and the
+   guest will be reset)
+   
+ • If guest is using a non-snapshot LV for storage, $pzero offers to shutdown
+   the guest, snapshot the original LV, and then configure the guest to use
+   the new snapshot as its storage
+
+${B}OPTIONS:${R}
+      
+  ${B}-d${R}, ${B}--dev${R}=<StorageDeviceLV>
+      Use this option to be explicit about which block device to focus on
+      Without this option, $pzero works with the first device that the
+      guest has as storage, i.e., whatever is returned by the command:
+          ${B}virsh dumpxml VirtGuestName|grep source.dev|head -1${R}
+
+  ${B}-L${R}, ${B}--size${R}=<SnapshotLogicalVolumeSize[bBsSkKmMgGtTpPeE]>
+      The snapshot size defaults to 3 GiB; use this option to change that
+
+  ${B}-m${R}, ${B}--merge${R}
+      Use this option to have ${B}lvconvert${R} merge a guest's snapshot back into
+      the origin logical volume (aborts if guest is not already using snapshot)
+
+Version info: ${version:2}
+See <http://github.com/ryran/b19scripts> to report bugs or suggestions"
+}
+
+# Declare getopt short and long options
+sopts='d:L:mh'
+lopts='dev:,size:,merge,help'
+
+# Check for bad switches
+getopt -Q --name=$pzero -o $sopts -l $lopts -- "$@" || { Help_Usage; exit 64; }
+
+# Parse command-line arguments
+PARSE() {
+  until [[ $1 = -- ]]; do
+    case $1 in
+      -d|--dev)    StorageDeviceLV=$2; shift 2 ;;
+      -L|--size)   SnapshotCOWSize=$2; shift 2 ;;
+      -m|--merge)  MergeSnapshot=true; shift 1 ;;
+      -h|--help)   Help_Usage; exit
+    esac
+  done
+  shift  # (to get rid of the '--')
+  VirtGuestName=$1
+}
+
+# Call the parser
+PARSE $(getopt -u --name=$pzero -o $sopts -l $lopts -- "$@")
+
+
+# Sanity checking
+if [[ -z $VirtGuestName ]]; then
+  # Quit if no args / not given name of a guest
+  Print "Error: VirtGuestName required"
+  echo
+  Help_Usage
+  exit 64
+elif [[ $UID != 0 ]]; then
+  # Quit if not root
+  Print "Error: Need root privileges for 'virsh' and 'lvm' commands"
+  exit 77
+elif ! virsh list --all --name | grep -q "^${VirtGuestName}$"; then
+  # Quit if improper guest name
+  Print "Error: VirtGuestName '$VirtGuestName' not recognized"
+  echo "Available guests:"
+  virsh list --all --name | sed -e /^$/d -e 's/^/  • /' 
+  exit 64
+fi
+
+
+# Create a temp-file for the guest definition
+XML=$(mktemp); trap "rm $XML" EXIT; chcon -t virt_etc_rw_t $XML
+
+# Save guest definition to temp-file
+virsh dumpxml $VirtGuestName >$XML
+
+# Detect source logical volume
+if [[ -n $StorageDeviceLV ]]; then
+  # If blockdev name was explicitly specified, look for that or that-snap
+  CurrentStorage=$(egrep "source dev='${StorageDeviceLV}('|-snap')" $XML | awk -F\' 'NR<2 {print $2}')
+  # Exit if we didn't find the requested logical volume
+  if [[ -z $CurrentStorage ]]; then
+    Print "Error: Specified StorageDeviceLV '$StorageDeviceLV' not found as storage for guest '$VirtGuestName'"
+    exit 66
+  fi
+  
+else
+  # Not explicitly specified, so let's do auto-detection
+  CurrentStorage=$(egrep "source dev=" $XML | awk -F\' 'NR<2 {print $2}')
+  # Exit if we didn't autodetect anything
+  if [[ -z $CurrentStorage ]]; then
+    Print "Error: Unable to autodetect StorageDeviceLV storage for guest '$VirtGuestName'"
+    exit 70
+  fi
+fi
+
+# Confirm that detected storage really is a logical volume
+if ! lvs "$CurrentStorage" >/dev/null; then
+  Print "Error: detected StorageDeviceLV '$CurrentStorage' for guest '$VirtGuestName' is not a logical volume"
+  echo Aborting
+  exit 65
+fi
+
+
+# Time to figure out if guest's current storage is a snapshot
+unset LVM2_ORIGIN LVM2_LV_PATH  # These are the 2 variables set by the following:
+eval $(lvs --nameprefixes --noheadings -o lv_path,origin $CurrentStorage)
+
+
+if [[ -n $LVM2_ORIGIN ]]; then  # If CurrentStorage has an origin, it's a snapshot
+  # If current storage is a snapshot, we'll set origin devpath and roll with that
+  
+  OriginLV=${LVM2_LV_PATH%/*}/$LVM2_ORIGIN
+  SnapshotLV=$LVM2_LV_PATH
+  
+  if [[ $MergeSnapshot == true ]]; then
+    # If we're doing a merge ...
+    Print "This will wait for '$VirtGuestName' to shut down and then merge the snapshot '$SnapshotLV' back into its origin '$OriginLV'"
+    Print "To be clear, this could take a while to finish and will leave the guest's original storage irrevocably altered"
+    Prompt "Continue? [y/n]"
+    # Need to shutdown guest before merging
+    Wait_Shutdown $VirtGuestName
+    lvconvert --merge $SnapshotLV
+  
+  else
+    # If not doing a merge, it's time to re-make the snapshot
+    Print "THIS WILL DESTROY GUEST '$VirtGuestName' AND RE-CREATE ITS SNAPSHOT"
+    Prompt "Continue? [y/n]"
+    # Kill guest as quickly as possible, since we're resetting it anyway
+    Wait_Destroy $VirtGuestName
+  fi
+  
+else
+  # If current storage is NOT a snapshot, we can offer to convert it
+  
+  OriginLV=$LVM2_LV_PATH
+  SnapshotLV=$LVM2_LV_PATH-snap
+  
+  Print "Storage '$CurrentStorage' for guest '$VirtGuestName' is not a snapshot LV"
+  Prompt "Would you like to configure this guest to use a newly-created snapshot? [y/n]"
+  # Need to shutdown guest gracefully, since not using snapshot yet
+  Wait_Shutdown $VirtGuestName
+  
+  # Change guest to use snapshot storage
+  sed -i "/source dev='${CurrentStorage////\\/}'/s,$CurrentStorage,$SnapshotLV," $XML
+  virsh undefine $VirtGuestName
+  virsh define $XML
+fi
+
+
+# Remove snapshot storage if it already exists
+if [[ -e $SnapshotLV ]]; then
+  echo -e "\nRemoving snapshot logical volume '$SnapshotLV' ..."
+  lvremove -f $SnapshotLV
+  while [[ -e $SnapshotLV ]]; do
+    echo "Waiting for snapshot removal ..."
+    (sleep 2; echo y) | lvremove $SnapshotLV
+    sleep 3
+  done
+fi
+
+# Create snapshot
+echo -e "\nCreating fresh snapshot '$SnapshotLV' of origin '$OriginLV' ..."
+lvcreate -s $OriginLV -L $SnapshotCOWSize -n $SnapshotLV
+
+# Start guest
+echo -e "\nStarting new instance of guest '$VirtGuestName' using new snapshot storage ..."
+virsh start $VirtGuestName &>/dev/null
+
+Print DONE
