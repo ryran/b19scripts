@@ -1,0 +1,263 @@
+#!/bin/bash
+# mwipe v3.0.0 last mod 2013/04/12
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2010, 2011, 2012, 2013 Ryan Sawhill <ryan@b19.org>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#-------------------------------------------------------------------------------
+# This will wipe out the beginning and end of every partition on all drives it
+# can find, including a full wipe of the MBRs, and potentially a full zeroing of
+# the drives as well.
+#-------------------------------------------------------------------------------
+
+zero=${0##*/}
+version=$(sed '2q;d' $0)
+
+# customizable pause lengths that aren't used if run with --fast
+sleep='sleep 3'
+SLEEP='sleep 6'
+
+# HELP FUNCTIONS
+USAGE() {
+echo "Usage: $zero [-B] [-d] [-r|-s] [-f] [-t] [-z] [BLOCKDEV]...
+       $zero [-h|--help]"
+}
+
+XHELP() {
+USAGE
+echo "
+Wipe out all partitions on all BLOCKDEV specified, where BLOCKDEV is the full
+path to the device node for a device, e.g., /dev/sda. If BLOCKDEV is omitted,
+any and all attached sd, hd, vd, & xvd devices will be selected for wiping.
+"
+
+echo "
+ -B, --bypass@bypass warning prompts
+ -d, --dryrun@do everything except the actual dd commands
+ -r, --reboot@execute reboot after wipe complete
+ -s, --shutdown@execute halt after wipe complete
+ -f, --fast@remove artificial pauses
+ -t, --chvt@automatically chage to tty9 and put output there
+ -R, --random@use /dev/urandom for partition-wiping instead of /dev/zero
+ -z, --fullzero@after wiping partitions, zero each drive
+" | column -s@ -t
+
+echo "
+If run with no arguments, will essentially look for any block devices it can
+find (or if BLOCKDEV(s) were specified and exist, then they will be used) and
+then wipe out the first and last 10 KiB of each detected partition. After that,
+the partition table in the MBR will be wiped as well, effectively eliminating
+any chance of recovering the data.
+
+By default, there are pauses inserted into the process to make it easier to
+follow the progress of things, but these can be removed with the '--fast' opt.
+When it finishes, the script will simply exit ... unless a '--reboot' or
+'--shutdown' option was used (those options cause a sysrq-triggered reboot or
+poweroff).
+
+YOU USE THIS SCRIPT AT YOUR OWN RISK
+
+Version info: ${version:2}
+To report bugs/suggestions or to get the latest version, see:
+  <http://github.com/ryran/b19scripts>"
+exit
+}
+
+#-------------------------------------------------------------------------------
+# POSITIONAL PARAMETER PARSING FUNCTION
+PARSE() {
+source=/dev/zero
+unset bypass dryrun post fast chvt fullzero
+until [[ $1 == -- ]]; do 
+  case $1 in
+    -r|--reboot)
+      [[ -z $post ]] &&
+        post=reboot || { echo "$zero: conflicting argument -- '$1'"; USAGE; exit 1; }
+  ;;
+    -s|--shutdown)
+      [[ -z $post ]] &&
+        post=shutdown || { echo "$zero: conflicting argument -- '$1'"; USAGE; exit 1; }
+  ;;
+    -B|--bypass)    bypass=y
+  ;;  
+    -d|--dryrun)    dryrun=y
+  ;;  
+    -f|--fast)      fast=y
+  ;;
+    -t|--chvt)      chvt=y
+  ;;
+    -z|--fullzero)  fullzero=y
+  ;;
+    -R|--random)    source=/dev/urandom
+  esac
+  shift
+done
+shift
+
+# SETUP DRIVES TO WIPE
+unset drives
+if [[ $# -eq 0 ]]; then
+  drives=$(awk '$4 ~ /^hd.$|^sd[[:alpha:]]+$|^xvd[[:alpha:]]+$|^vd[[:alpha:]]+$/ {printf " /dev/"$4}' /proc/partitions)
+  autodetected=y
+else
+  until [[ $# -eq 0 ]]; do
+    minor=$(awk /${1#/dev/}$/'{minor=$2}END{print minor/8}' /proc/partitions 2>/dev/null)
+    if [[ -b $1 ]] && [[ ${minor/*./-} -ge 0 ]]; then
+      drives="$drives $1"
+      shift
+      autodetected=n
+    else
+      echo "$zero: invalid block device specified -- '$1'"
+      if [[ ${1:8} -gt 0 || ${1:9} -gt 0 ]]; then
+        echo "$zero: perhaps '${1%[[:digit:]]}' was intended?"
+      fi
+      exit 1
+    fi
+  done
+fi
+}
+
+#-------------------------------------------------------------------------------
+# START PARSING POSITIONAL PARAMS
+
+case ${1##*-} in
+  help|\?|h) XHELP
+esac
+
+Sopts="BdrsftzR"
+Lopts="bypass,dryrun,reboot,shutdown,fast,chvt,fullzero,random"
+getopt -Q --name=$zero -o $Sopts -l $Lopts -- $* || { USAGE; exit 1; }
+
+PARSE $(getopt -u --name=$zero -o $Sopts -l $Lopts -- $*)
+
+
+# KITTEN-EATING WARNING
+if [[ $bypass != y ]]; then
+  echo "CAUTION! DANGER!"
+  echo "TAKE ADVANTAGE OF CTRL-C AT ANY TIME TO EXIT"
+  echo
+  if [[ $autodetected == y ]]; then
+    echo "You have chosen to wipe the partition tables (MBR) on all detected drives"
+  else
+    echo "You have chosen to wipe the partition tables (MBR) on specified drives"
+  fi
+  echo "[$drives ]"
+  echo
+  echo "Additionally, the beginning and end of each partition will be wiped"
+  echo
+  echo "This is your only warning -- Are you sure this is what you want?"
+  echo "Type uppercase YES to confirm"
+  until [[ $a1 == YES ]]; do read -ep "> " a1; done
+fi
+
+# TO SWITCH OR NOT TO SWITCH
+if [[ $chvt == y ]]; then
+  chvt 9
+  exec 1>/dev/tty9
+  exec 2>&1
+fi
+
+# TO PAUSE OR NOT TO PAUSE
+if [[ $fast == y ]]; then
+  unset sleep SLEEP
+fi
+
+#-------------------------------------------------------------------------------
+# ENDGAME
+for drive in $drives ; do
+
+  echo -e "\nAbout to wipe the partitions on $drive!!!"
+
+  $SLEEP
+  
+  PartedOutput=$(parted -s $drive unit s print)
+  
+  # GET DISK SIZE INFO
+  NumSectors=$(echo "$PartedOutput" | grep '^Disk /dev/.*s$' | sed -r 's,.*: ([0-9]+)s,\1,')
+  SectorSize=$(echo "$PartedOutput" | grep '^Sector size'    | sed -r 's,.*: ([0-9]+)B.*,\1,')
+  # NOTE: The above is pulling the logical (not physical) sector size. Maybe should change that?
+
+  [[ $SectorSize -gt 0 ]] || SectorSize=512  # Failsafe in case parted sector-size detection fails
+
+  # KILL FIRST AND LAST 10 KiB OF EACH PARTITION
+  # If you want to explicitly specify which part nums to wipe or the order to
+  # wipe them, replace next 3lines with e.g. 'for part in 7 6 5 1 2 3 4 ; do'
+  for Partition in $(echo "$PartedOutput" | awk '/^[[:space:]]*[0-9]+/ {print $1}' | sort -rn); do
+  
+      PartitionStart=$(echo "$PartedOutput" | awk "\$1 == $Partition {print \$2}" | tr -d s)
+                       
+      PartitionEnd=$(echo "$PartedOutput" | awk "\$1 == $Partition {print \$3}" | tr -d s)
+
+      echo -e "\n========= Starting sector for ${drive}${Partition}: $PartitionStart"
+      [[ $dryrun == y ]] &&
+        echo -e "(DRY-RUN, so following dd cmd skipped)\ndd oflag=direct if=$source of=$drive bs=$SectorSize count=20 seek=$PartitionStart" ||
+        dd oflag=direct if=$source of=$drive bs=$SectorSize count=20 seek=$PartitionStart
+      $sleep
+
+      echo "--------- Ending sector for ${drive}${Partition}: $PartitionEnd"
+      [[ $dryrun == y ]] &&
+        echo -e "(DRY-RUN, so following dd cmd skipped)\ndd oflag=direct if=$source of=$drive bs=$SectorSize count=20 seek=$((PartitionEnd-20))" ||
+        dd oflag=direct if=$source of=$drive bs=$SectorSize count=20 seek=$((PartitionEnd-20))
+      $sleep
+  done
+
+  # KILL MBR/PARTITION TABLE
+  echo -e "\n=^=^=^=^= About to wipe MBR on $drive!"
+  $sleep
+  [[ $dryrun == y ]] &&
+    echo -e "(DRY-RUN, so following dd cmd was skipped)\ndd oflag=direct if=$source of=$drive bs=$SectorSize count=20" ||
+    dd oflag=direct if=$source of=$drive bs=$SectorSize count=20
+  # GPT places a secondary header at end of volume that also needs to be deleted:
+  [[ $dryrun == y ]] &&
+    echo -e "(DRY-RUN, so following dd cmd was skipped)\ndd oflag=direct if=$source of=$drive bs=$SectorSize seek=$((NumSectors-20)) count=21" ||
+    dd oflag=direct if=$source of=$drive bs=$SectorSize seek=$((NumSectors-20)) count=21
+  $SLEEP
+done
+
+#-------------------------------------------------------------------------------
+# FULLZERO CODE
+# I haven't gotten around to testing the following; it looks good to me, but it
+# might not work properly and could even ruin your life
+# If you want an explanation:
+# We're using dd to zero out each drive & bash job-control to parallelize
+if [[ $fullzero = y ]]; then
+  unset pids
+  echo "Beginning to zero whole drive(s)..."
+  for drive in $drives; do
+    [[ $dryrun == y ]] &&
+      echo -e "(DRY-RUN, so following dd cmd was skipped)\ndd if=/dev/zero of=${drive} bs=4096 &" ||
+      dd if=/dev/zero of=${drive} bs=4096 &
+    pids="$pids $!"
+    sleep 5s
+  done
+  sleep 5s
+# Then, every two minutes we print out progress of each of these dd processes
+# Unfortunately, this part isn't magical enough to tell you which disk it is
+# TODO: Could easily do some fun with array variables to make it happen...
+  for pid in $pids; do
+    while kill -0 $pid; do kill -USR1 $pid; sleep 2m; done&
+  done
+  wait
+fi
+
+#-------------------------------------------------------------------------------
+# PROLOGUE
+echo DONE WITH MWIPE
+
+if [[ $post = reboot ]]; then
+  echo REBOOTING...; $S
+  for X in s u b; do echo $X > /proc/sysrq-trigger; sleep 2; done
+  sleep 3
+elif [[ $post = shutdown ]]; then
+  echo HALTING...; $S
+  for X in s u o; do echo $X > /proc/sysrq-trigger; sleep 2; done
+  sleep 3
+fi
