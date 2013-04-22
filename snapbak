@@ -1,5 +1,5 @@
 #!/bin/bash
-# snapbak v0.0.4 last mod 2013/03/08
+# snapbak v0.2.0 last mod 2013/04/22
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2013 Ryan Sawhill <rsaw@redhat.com>
 #
@@ -15,7 +15,7 @@
 #
 #-------------------------------------------------------------------------------
 
-# Auto-detect program-name from filename
+# Program name
 pzero=snapbak
 
 # Get version from line #2
@@ -65,12 +65,13 @@ Prompt() {
 # Help page
 Help_Usage() {
   echo -e "Usage: ${B}$pzero [OPTIONS] <VirtGuestName>${R}
-Run against a KVM guest that has LVM logical volumes for storage
+Ideally, run against a KVM guest that has LVM logical volumes for storage
 
 ${B}VirtGuestName${R} must be one of the names returned by ${B}virsh list --all${R}
 
-$pzero will abort if a guest's storage is not a logical volume; otherwise it
-will auto-detect whether the logical volume is a snapshot
+$pzero will abort if a guest's primary (first) storage is a block device but
+not a logical volume; otherwise it will auto-detect whether the logical volume
+is a snapshot
 
  • If guest is using an LV snapshot for storage, $pzero can recreate a fresh
    snapshot from the origin (and reset the guest) OR, if using the ${B}--merge${R}
@@ -79,9 +80,18 @@ will auto-detect whether the logical volume is a snapshot
    guest will be reset)
    
  • If guest is using a non-snapshot LV for storage, $pzero offers to shutdown
-   the guest, snapshot the original LV, and then configure the guest to use
+   the guest, snapshot the original LV, and then reconfigure the guest to use
    the new snapshot as its storage
 
+If a guest's primary storage is an image file, $pzero offers to create a new
+logical volume for the guest to use in place of said image file
+
+ • If this succeeds, $pzero will transfer data from the image file directly
+   on to the new LV and modify the guest to use the new LV
+   After that, $pzero will treat the guest as any other guest using a
+   non-snapshot LV for storage -- namely, it will offer to snapshot the
+   original LV and finally reconfigure the guest to use THAT new snapshot
+   
 ${B}OPTIONS:${R}
       
   ${B}-d${R}, ${B}--dev${R}=<StorageDeviceLV>
@@ -154,44 +164,149 @@ virsh dumpxml $VirtGuestName >$XML
 
 # Detect source logical volume
 if [[ -n $StorageDeviceLV ]]; then
-  # If blockdev name was explicitly specified, look for that or that-snap
-  CurrentStorage=$(egrep "source dev='${StorageDeviceLV}(-snap)?'" $XML | awk -F\' 'NR<2 {print $2}')
-  # Exit if we didn't find the requested logical volume
-  if [[ -z $CurrentStorage ]]; then
-    Print "Error: Specified StorageDeviceLV '$StorageDeviceLV' not found as storage for guest '$VirtGuestName'"
+  # If blockdev name was explicitly specified, look for that or that"-snap"
+  CurrentStorageDisk=$(egrep "source dev='${StorageDeviceLV}(-snap)?'" $XML | awk -F\' 'NR<2 {print $2}')  # return only 1st result
+  if [[ -z $CurrentStorageDisk ]]; then
+    # Quit if requested logical volume not found
+    Print "Error: Specified storage device '$StorageDeviceLV' not found as storage for guest '$VirtGuestName'"
     exit 66
   fi
   
 else
   # Not explicitly specified, so let's do auto-detection
-  CurrentStorage=$(egrep "source dev=" $XML | awk -F\' 'NR<2 {print $2}')
-  # Exit if we didn't autodetect anything
-  if [[ -z $CurrentStorage ]]; then
-    Print "Error: Unable to autodetect StorageDeviceLV storage for guest '$VirtGuestName'"
-    exit 70
+  CurrentStorageDisk=$(grep "source dev=" $XML | awk -F\' 'NR<2 {print $2}')  # return only 1st result
+  if [[ -z $CurrentStorageDisk ]]; then
+    # If no source devs found, check for image files
+    CurrentStorageFile=$(grep "source file=" $XML | awk -F\' 'NR<2 {print $2}')  # return only 1st result
+    if [[ -z $CurrentStorageFile || ${CurrentStorageFile,,} =~ \.iso$ ]]; then
+      # Quit if no source devs or files found (or if only iso files found)
+      Print "Error: Unable to autodetect storage for guest '$VirtGuestName'"
+      exit 70
+    fi
   fi
 fi
 
-# Confirm that detected storage really is a logical volume
-if ! lvs "$CurrentStorage" >/dev/null; then
-  Print "Error: detected StorageDeviceLV '$CurrentStorage' for guest '$VirtGuestName' is not a logical volume"
-  echo Aborting
-  exit 65
+
+# If detected a storage device ...
+if [[ -n $CurrentStorageDisk ]]; then
+  # Is detected storage device a logical volume?
+  if lvs "$CurrentStorageDisk" >/dev/null; then
+    # If yes, let's move on
+    CurrentStorage=$CurrentStorageDisk
+  else
+    # If no, abort
+    Print "Error: detected storage device '$CurrentStorageDisk' for guest '$VirtGuestName' is not an LVM logical volume ($pzero only works with guests whose storage is a logical volume or an image file)"
+    echo Aborting
+    exit 65
+  fi
 fi
 
 
-# Time to figure out if guest's current storage is a snapshot
+# =============================================================================
+# IF FOUND A STORAGE *FILE*, LET'S SEE WHAT WE SHOULD DO
+# -----------------------------------------------------------------------------
+
+if [[ -n $CurrentStorageFile ]]; then
+  
+  # Detect storage file format
+  StorageFileImgFormat=$(qemu-img info "$CurrentStorageFile" | awk '/file format:/ {print $3}')
+  
+  # Give the option of converting img file to LVM
+  Print "Guest '$VirtGuestName' is using '$CurrentStorageFile' as a raw storage file"
+  Prompt "Configure this guest to use new LVM storage? [y/n]"
+  
+  # Get "virtual size" of img file in bytes; convert to MiB
+  StorageFileSize=$(qemu-img info "$CurrentStorageFile" | 
+                    awk '/virtual size:/ {printf "%.1f", gensub(/.* \(([0-9]+) bytes\)/, "\\1", 1) / 1024 / 1024}')
+  
+  # Notify
+  Print "To replace '$CurrentStorageFile' with LVM storage, a new logical volume of size '${StorageFileSize}M' must be created"
+  echo
+  
+  # Compare needed size to space available in volgroups
+  Print "Inspecting LVM volume groups ..."
+  vgs --noheadings --nosuffix --units m -o vg_name,vg_free |
+    awk -v StorageSize=$StorageFileSize '
+      $2 >= StorageSize {printf "  ✔  VG \"%s\" appears to have enough space\n", $1}
+      $2 <  StorageSize {printf "  ✖  VG \"%s\" does not have enough space\n", $1}'
+  echo
+  
+  # Gather data for creating new LV
+  Print "In which volume group should the new logical volume be created?"
+  read -p "> " VolGroup
+  Print "What name should the new logical volume be given?"
+  read -p "> " LogVol
+  Print "What size should the new logical volume have? (Use size suffixes as in lvcreate)"
+  Print "[ press Enter to use autodetected size of ${StorageFileSize}M ]"
+  read -p "> " LogVolSize
+  [[ -z $LogVolSize ]] && LogVolSize=${StorageFileSize}M
+  
+  # Create new LV and abort if any errors
+  Print "The following command will be attempted:"
+  echo "  'lvcreate -L $LogVolSize -n $LogVol $VolGroup'"
+  Prompt "Continue? [y/n]"
+  
+  if ! lvcreate -L $LogVolSize -n $LogVol $VolGroup; then
+    Print "Error: lvcreate command failed"
+    echo Aborting
+    exit 113  #FIXME: exit code?
+  fi
+  
+  # Ensure guest is shut down before doing anything else
+  Print "Created logical volume ... now must ensure guest is not running ..."
+  Wait_Shutdown $VirtGuestName
+  
+  # Get fresh xml without all the transitory nonsense present in a running guest
+  virsh dumpxml $VirtGuestName >$XML
+  echo
+  
+  # Time to copy image file to new logvol
+  CurrentStorageDisk=/dev/$VolGroup/$LogVol
+  Print "Will copy '$CurrentStorageFile' img file data to new logvol '$CurrentStorageDisk', leaving img file intact ..."
+  nice qemu-img convert -p -O raw "$CurrentStorageFile" $CurrentStorageDisk
+  echo
+  
+  # Time to tweak the guest xml, so a little communication first
+  Print "Modifying guest '$VirtGuestName' to use new LVM storage in place of old image file ..."
+  XML_bak=$(mktemp)
+  cp -a $XML $XML_bak
+  Print "(In case things go bad: Backup of guest xml definitions saved to: $XML_bak)"
+  
+  # Get line number for line containing "source file=" declaration
+  linenum=$(grep -n "<source file='$CurrentStorageFile'" $XML | cut -d: -f1)
+  # Grab the identation for that line as well
+  indent=$(sed "${linenum}q;d" $XML | cut -d\< -f1)
+  # Change "source file=" declaration to new "source dev="
+  sed -i "${linenum}s,file='$CurrentStorageFile,dev='$CurrentStorageDisk," $XML
+  # Change "disk type=" declaration to block
+  sed -ri "$((linenum-4)),$((linenum-1))s/^(${indent%  }<disk .*type=)'file'/\1'block'/" $XML
+  # Change "driver type=" declaration to raw
+  sed -ri "$((linenum-3)),$((linenum-1))s/^($indent<driver .*type=)'[[:alnum:]]+'/\1'raw'/" $XML
+  # Kill and redefine guest
+  virsh undefine $VirtGuestName
+  virsh define $XML
+  # Save to CurrentStorage var so we can continue on and convert to snapshot
+  CurrentStorage=$CurrentStorageDisk
+fi
+
+
+# =============================================================================
+# LVM STORAGE PRESENT, SO IT'S TIME TO MESS WITH SNAPSHOTS
+# -----------------------------------------------------------------------------
+
+# Save details about guest's current storage to variables
 unset LVM2_ORIGIN LVM2_LV_PATH  # These are the 2 variables set by the following:
 eval $(lvs --nameprefixes --noheadings -o lv_path,origin $CurrentStorage)
 
-
+# Is LVM storage a snapshot LV or just an LV?
 if [[ -n $LVM2_ORIGIN ]]; then  # If CurrentStorage has an origin, it's a snapshot
-  # If current storage is a snapshot, we'll set origin devpath and roll with that
+  # If current storage is a snapshot, let's see if we need to merge it or recreate it
   
+  # Set origin devpath and roll with that
   OriginLV=${LVM2_LV_PATH%/*}/$LVM2_ORIGIN
   SnapshotLV=$LVM2_LV_PATH
   
-  if [[ $MergeSnapshot == true ]]; then
+  if [[ $MergeSnapshot == true ]]; then  # $MergeSnapshot set via cmdline args
     # If we're doing a merge ...
     Print "This will wait for '$VirtGuestName' to shut down and then merge the snapshot '$SnapshotLV' back into its origin '$OriginLV'"
     Print "To be clear, this could take a while to finish and will leave the guest's original storage irrevocably altered"
@@ -209,7 +324,7 @@ if [[ -n $LVM2_ORIGIN ]]; then  # If CurrentStorage has an origin, it's a snapsh
   fi
   
 else
-  # If current storage is NOT a snapshot, we can offer to convert it
+  # If current storage is NOT a snapshot, offer to convert it
   
   OriginLV=$LVM2_LV_PATH
   SnapshotLV=$LVM2_LV_PATH-snap
@@ -218,6 +333,9 @@ else
   Prompt "Would you like to configure this guest to use a newly-created snapshot? [y/n]"
   # Need to shutdown guest gracefully, since not using snapshot yet
   Wait_Shutdown $VirtGuestName
+  
+  # Get fresh xml without all the transitory nonsense present in a running guest
+  virsh dumpxml $VirtGuestName >$XML
   
   # Change guest to use snapshot storage
   sed -i "/source dev='${CurrentStorage////\\/}'/s,$CurrentStorage,$SnapshotLV," $XML
