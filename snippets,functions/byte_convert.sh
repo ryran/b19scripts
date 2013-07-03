@@ -1,4 +1,24 @@
 #!/bin/bash
+# byte_convert.sh v0.10 last mod 2012/12/08
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2012, 2013 Ryan Sawhill <ryan@b19.org>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#-------------------------------------------------------------------------------
+# Save to /etc/profile.d/
+# Resource your BASH config files (or reload your shell)
+# byte_convert will provide 7 new commands:
+# b, k, m, g, t, p, and e
+#-------------------------------------------------------------------------------
+
 
 byte_convert() {
   
