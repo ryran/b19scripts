@@ -1,0 +1,15 @@
+#!/bin/bash
+# Start Zenity (might not be installed by default) as a bash coprocess
+coproc zenity --progress --pulsate --title='Testing' --text='Starting up...'
+z1=${COPROC[1]}
+
+# Update Zenity...
+sleep 2s
+echo 33 >&$z1
+echo '#One third done...' >&$z1
+sleep 2s
+echo 67 >&$z1
+echo '#Two thirds done...' >&$z1
+sleep 2s
+echo 100 >&$z1      # Close Zenity and therefore the background task.
+echo '#Finished!' >&$z1

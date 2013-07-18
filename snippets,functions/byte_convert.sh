@@ -14,7 +14,7 @@
 #    General Public License <gnu.org/licenses/gpl.html> for more details.
 #-------------------------------------------------------------------------------
 # Save to /etc/profile.d/
-# Resource your BASH config files (or reload your shell)
+# Re-source your BASH config files (or reload your shell)
 # byte_convert will provide 7 new commands:
 # b, k, m, g, t, p, and e
 #-------------------------------------------------------------------------------
