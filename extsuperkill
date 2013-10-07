@@ -1,5 +1,5 @@
 #!/bin/bash
-# extsuperkill v0.0.1 last mod 2013/10/01
+# extsuperkill v0.0.2 last mod 2013/10/01
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2013 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
@@ -19,11 +19,21 @@ pzero=${0##*/}  # Appname
 version=$(sed '2q;d' $0)  # Version from line 2
 
 show_help() {
-  echo "Usage: $pzero [ -Y | --bypass ] [ -a | --all | DEVICE... ]
-        or:  $pzero [ -h | --help ]
-Quickly destroy the primary and backup superblocks of ext filesystems on DEVICE
-With -a or --all: do the same to all auto-detected ext[234] filesystems
-With -Y or --bypass: no warning or chance to abort will be given
+  echo "Usage: $pzero [-Y|--bypass] [-f|--fast] -a|--all|DEVICE...
+Quickly destroy the primary and backup superblocks of ext filesystems
+
+With -a or --all: blkid is used to detect and select all ext[234] filesystems.
+Otherwise, devices must be specified manually.
+Either way, the selected devices will be listed and a warning prompt will
+require confirmation to continue with the wiping.
+To bypass the warning prompt, use -Y or --bypass; in that case, no warning or
+chance to review selected devices and abort will be given.
+
+Root access will of course be required; dumpe2fs is used to detect the
+superblock locations and dd is used to overwrite them with random data.
+
+After wiping all superblocks on a device, each superblock will be tested with
+dumpe2fs. This additional check can be skipped with the -f or --fast options.
 
 YOU USE THIS SOFTWARE AT YOUR OWN RISK
 
@@ -56,7 +66,7 @@ test_dev_contains_extfs() {
 }
 
 get_block_size() {
-  dumpe2fs -h $1 2>/dev/null | awk '/Block size:/ {print $3}'
+  dumpe2fs -h $1 2>/dev/null | awk '/Block size:/ {print $3; exit}'
 }
 
 get_superblocks() {
@@ -64,15 +74,28 @@ get_superblocks() {
 }
 
 wipe_superblocks() {
-  for block in $(get_superblocks $1); do
+  superblockList=$(get_superblocks $1)
+  printf "    "
+  for block in $superblockList; do
     printf "$block "
-    dd if=/dev/urandom bs=$(get_block_size $1) count=1 oflag=direct seek=$block of=$1 &>/dev/null
+    dd if=/dev/urandom bs=$blockSize count=1 oflag=direct seek=$block of=$1 &>/dev/null
   done
   echo
 }
 
+check_superblocks() {
+  for block in $superblockList; do
+    printf "    $block:\t"
+    if dumpe2fs -o superblock=$block $1 &>/dev/null; then
+       echo "✖  Superblock appears intact! Check manually: 'dumpe2fs -o superblock=$block $1'"
+    else
+       echo "✔  Invalid filesystem superblock"
+    fi
+  done
+}
+
 parse_positional_params() {
-  unset doAutodetect bypassWarning
+  unset doAutodetect bypassWarning skipSuperBlockCheck
   until [[ $1 == -- ]]; do
     case $1 in
       -a|--all)     doAutodetect=y
@@ -80,6 +103,8 @@ parse_positional_params() {
       -h|--help)    show_help
     ;;
       -Y|--bypass)  bypassWarning=y
+    ;;
+      -f|--fast)    skipSuperBlockCheck=y
     esac
     shift
   done
@@ -88,8 +113,8 @@ parse_positional_params() {
 }
 
 # getopt options
-shortOpts="ahY"
-longOpts="all,help,bypass"
+shortOpts="ahYf"
+longOpts="all,help,bypass,fast"
 
 # Check for bad args
 getopt -Q --name=$pzero -o $shortOpts -l $longOpts -- "$@" || show_help
@@ -101,7 +126,7 @@ parse_positional_params $(getopt -u --name=$pzero -o $shortOpts -l $longOpts -- 
 if [[ $doAutodetect == y ]]; then
   deviceList=$(autodetect_all_ext_devs)
   if [[ -n $deviceList ]]; then
-    echo "Auto-detected ext filesystems on devices:"
+    echo "Auto-detected ext filesystem(s) on the following device(s):"
     fold -sw $(($(tput cols)-3)) <<<$deviceList | sed 's/^/  /'
   else
     echo "Unable to auto-detect any ext filesystems"
@@ -110,12 +135,12 @@ if [[ $doAutodetect == y ]]; then
 
 # Otherwise print about specified devices:
 elif [[ -n $deviceList ]]; then
-  echo "Devices specified on command-line:"
+  echo "Device(s) specified on command-line:"
   fold -sw $(($(tput cols)-3)) <<<$deviceList | sed 's/^/  /'
 
 # If no autodetect or no devices specified:
 elif [[ -z $deviceList ]]; then
-  echo "No devices specified; use -a to auto-detect all devices"
+  echo "No devices specified; use -a to auto-detect all devices or -h for help"
   exit 1
 fi
 
@@ -124,10 +149,10 @@ echo
 # Force prompt to continue
 if [[ $bypassWarning != y ]]; then
   echo "CAUTION WARNING DANGER!!"
-  echo "About to irrevocably damage the ext filesystems on the above devices"
-  echo "This is your only warning"
-  echo "Type uppercase YES to continue"
-  until [[ $a1 == YES ]]; do read -ep "> " a1; done
+  echo "About to irrevocably damage filesystem(s) on the above-mentioned device(s)"
+  echo "This is your only warning; Type uppercase YES to confirm and initiate wiping"
+  read -ep "> "
+  [[ $REPLY == YES ]] || { echo "Aborting"; exit; }
   echo
 fi
 
@@ -150,10 +175,16 @@ done
 for dev in $deviceList; do
   # Make sure device is ext
   test_dev_contains_extfs $dev
-  echo     "  Block size detected as $(get_block_size $dev)b"
-  echo -en "  Wiping primary and backup superblocks at block numbers...\n    "
+  blockSize=$(get_block_size $dev)
+  echo "  Block size detected as ${blockSize}b"
+  echo "  Wiping primary and backup superblocks at block numbers..."
   # Wipe superblocks, printing as it goes
   wipe_superblocks $dev
-  echo -e  "  Wipe finished\n"
+  echo "  Wipe finished"
+  if [[ $skipSuperBlockCheck != y ]]; then
+    echo "  Confirming all superblocks wiped..."
+    check_superblocks $dev
+  fi
+  echo
 done
 
