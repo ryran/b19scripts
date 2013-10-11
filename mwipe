@@ -1,5 +1,5 @@
 #!/bin/bash
-# mwipe v4.0.0 last mod 2013/09/26
+# mwipe v4.0.1 last mod 2013/10/11
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2010, 2011, 2012, 2013 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
@@ -72,8 +72,8 @@ Other options:"
   echo "
  -Y, --bypass❚bypass warning prompts
  -n, --dryrun❚do everything except the actual commands
- -b, --background❚use bash job control to background each SSH process used
-                 ❚for remote wiping (semi-parallelization)
+ -b, --background❚use ssh -n and bash job control to background each
+                 ❚SSH process used for remote wiping (semi-parallelization)
                  ❚note: --background automatically triggers --chvt & --bypass
  -r, --reboot❚execute reboot after wipe complete
  -s, --shutdown❚execute halt after wipe complete
@@ -81,12 +81,12 @@ Other options:"
  -f, --full❚after wiping partitions, fully-wipe each drive
  -R, --random❚with --full only: use openssl PRNG instead of /dev/zero
  -d, --devs DEV❚where DEV is the full path to a block device or a comma-
-                ❚delimited list of the same
+               ❚delimited list of the same
 " | column -s❚ -t
 
   echo "
 If run with no arguments, $zero will essentially look for any block devices
-it can find and then wipe out between 0.5 and 1 MiB from the beginning and
+it can find and then wipe out between 32 and 128 KiB from the beginning and
 [up to the] end of each detected partition. After that, the partition table in
 the MBR will be wiped as well, virtually eliminating any chance of recovering
 the data.
@@ -375,19 +375,20 @@ cat >>$cmdScript <<\EOF
   # PROLOGUE
   if [[ $background == y ]]; then
     exec 1>&3
-    echo "Wipe finished on host: $(hostname)"
+    echo "Wipe finished on host: $(hostname) $(
+      [[ $post == reboot ]] && echo ... REBOOTING
+      [[ $post == shutdown ]] && echo ... HALTING
+    )"
     exec 1>/dev/tty9
   fi
   echo -e "\nWipe finished on host: $(hostname)"
 
-  if [[ $post = reboot ]]; then
-    echo REBOOTING...; $S
-    for X in s u b; do echo $X > /proc/sysrq-trigger; sleep 2; done
-    sleep 3
-  elif [[ $post = shutdown ]]; then
-    echo HALTING...; $S
-    for X in s u o; do echo $X > /proc/sysrq-trigger; sleep 2; done
-    sleep 3
+  if [[ $post == reboot ]]; then
+    echo REBOOTING...
+    for X in s u b; do sleep 2; echo $X > /proc/sysrq-trigger; done
+  elif [[ $post == shutdown ]]; then
+    echo HALTING...
+    for X in s u o; do sleep 2; echo $X > /proc/sysrq-trigger; done
   fi
 
 EOF
@@ -401,10 +402,10 @@ if [[ -n $remoteHosts ]]; then
   # If we have remote hosts, then let's run the command script on them
   for host in $remoteHosts; do
     if [[ $background == y ]]; then
-      ssh ${hostPrefix}${host}${hostSuffix} "$(<$cmdScript)" &
+      ssh -n -o ServerAliveCountMax=2 -o ServerAliveInterval=2 ${hostPrefix}${host}${hostSuffix} "$(<$cmdScript)" &
     else
       echo -e "\n${c_Sep}------------------------------------------------{${c_Hostname}${hostPrefix}${host}${hostSuffix}${c_Text}"
-      ssh ${hostPrefix}${host}${hostSuffix} "$(<$cmdScript)"
+      ssh -o ServerAliveCountMax=2 -o ServerAliveInterval=2 ${hostPrefix}${host}${hostSuffix} "$(<$cmdScript)"
       printf "$reset"
     fi
   done
