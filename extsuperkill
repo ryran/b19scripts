@@ -1,5 +1,5 @@
 #!/bin/bash
-# extsuperkill v0.0.2 last mod 2013/10/01
+# zape2fs v0.1.1 last mod 2013/10/21
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2013 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
@@ -19,8 +19,8 @@ pzero=${0##*/}  # Appname
 version=$(sed '2q;d' $0)  # Version from line 2
 
 show_help() {
-  echo "Usage: $pzero [-Y|--bypass] [-f|--fast] -a|--all|DEVICE...
-Quickly destroy the primary and backup superblocks of ext filesystems
+  echo "Usage: $pzero [-Y|--bypass] [-t|--test] -a|--all|DEVICE...
+Quickly render data on ext filesystems irrecoverable
 
 With -a or --all: blkid is used to detect and select all ext[234] filesystems.
 Otherwise, devices must be specified manually.
@@ -29,11 +29,12 @@ require confirmation to continue with the wiping.
 To bypass the warning prompt, use -Y or --bypass; in that case, no warning or
 chance to review selected devices and abort will be given.
 
-Root access will of course be required; dumpe2fs is used to detect the
-superblock locations and dd is used to overwrite them with random data.
+Root access will of course be required; dumpe2fs is used to detect the block
+locations of inode/block bitmaps, inode tables, superblocks and dd is then
+used to overwrite those locations with zeros or random data.
 
-After wiping all superblocks on a device, each superblock will be tested with
-dumpe2fs. This additional check can be skipped with the -f or --fast options.
+With -t or --test, after wiping all superblocks on a device, each superblock
+will be tested with dumpe2fs to ensure they were properly wiped.
 
 YOU USE THIS SOFTWARE AT YOUR OWN RISK
 
@@ -50,10 +51,10 @@ autodetect_all_ext_devs() {
 
 test_dev_contains_extfs() {
   local blkidOutput TYPE
-  if blkidOutput=$(blkid -o export $1); then
+  if blkidOutput=$($blkid -o export $1); then
     eval $blkidOutput
     echo "$1 contains $TYPE filesystem"
-    if [[ ${TYPE%?} == ext ]] && dumpe2fs -h $1 &>/dev/null; then
+    if [[ ${TYPE%?} == ext ]] && $dumpe2fs -h $1 &>/dev/null; then
       :
     else
       echo "Choose a device that contains an ext[234] filesystem"
@@ -65,37 +66,67 @@ test_dev_contains_extfs() {
   fi
 }
 
+dumpe2fs_command() {
+  $cat $dumpe2fs_output_file
+}
+
 get_block_size() {
-  dumpe2fs -h $1 2>/dev/null | awk '/Block size:/ {print $3; exit}'
+  dumpe2fs_command | awk '/Block size:/ {print $3; exit}'
+}
+
+get_block_bitmaps() {
+  dumpe2fs_command | awk '/Block bitmap at/ {print gensub(/.* Block bitmap at ([0-9]+) .*/, "\\1", 1)}' 
+}
+
+get_inode_bitmaps() {
+  dumpe2fs_command | awk '/Inode bitmap at/ {print gensub(/.* Inode bitmap at ([0-9]+) .*/, "\\1", 1)}' 
+}
+
+get_inode_tables() {
+  dumpe2fs_command | awk '/Inode table at/ {print gensub(/.* Inode table at ([0-9]+)-([0-9]+) .*/, "\\1 \\2", 1)}'
 }
 
 get_superblocks() {
-  dumpe2fs $1 2>/dev/null | awk '/superblock/ {print gensub(/.* superblock at ([0-9]+), .*/, "\\1", 1)}' | tac
+  dumpe2fs_command | awk '/superblock/ {print gensub(/.* superblock at ([0-9]+), .*/, "\\1", 1)}'
 }
 
-wipe_superblocks() {
-  superblockList=$(get_superblocks $1)
+wipe_blocks() {
+  local device=$1 ; shift
   printf "    "
-  for block in $superblockList; do
+  for block in $@; do
     printf "$block "
-    dd if=/dev/urandom bs=$blockSize count=1 oflag=direct seek=$block of=$1 &>/dev/null
+    $dd if=/dev/urandom bs=$(get_block_size $device) count=1 seek=$block of=$device &>/dev/null
   done
   echo
 }
 
+wipe_inode_tables() {
+  local device=$1 ; shift
+  printf "    "
+  while read line; do
+    start=$($cut -d ' ' -f1 <<<"$line")
+    end=$($cut -d ' ' -f2 <<<"$line")
+    count=$(( $end - $start + 1 ))
+    printf "$start-$end "
+    $dd if=/dev/zero bs=$(get_block_size $device) count=$count seek=$start of=$device &>/dev/null
+  done <<<"$(get_inode_tables $device)"
+  echo 
+}
+
 check_superblocks() {
-  for block in $superblockList; do
-    printf "    $block:\t"
-    if dumpe2fs -o superblock=$block $1 &>/dev/null; then
-       echo "✖  Superblock appears intact! Check manually: 'dumpe2fs -o superblock=$block $1'"
+  local device=$1 ; shift
+  for block in $@; do
+    printf "    $block:❚"
+    if $dumpe2fs -o superblock=$block $device &>/dev/null; then
+       echo "✖  Superblock appears intact! Check manually: 'dumpe2fs -o superblock=$block $device'"
     else
        echo "✔  Invalid filesystem superblock"
     fi
-  done
+  done | $column -ts❚
 }
 
 parse_positional_params() {
-  unset doAutodetect bypassWarning skipSuperBlockCheck
+  unset doAutodetect bypassWarning doSuperBlockTest
   until [[ $1 == -- ]]; do
     case $1 in
       -a|--all)     doAutodetect=y
@@ -104,7 +135,7 @@ parse_positional_params() {
     ;;
       -Y|--bypass)  bypassWarning=y
     ;;
-      -f|--fast)    skipSuperBlockCheck=y
+      -t|--test)    doSuperBlockTest=y
     esac
     shift
   done
@@ -113,8 +144,8 @@ parse_positional_params() {
 }
 
 # getopt options
-shortOpts="ahYf"
-longOpts="all,help,bypass,fast"
+shortOpts="ahYt"
+longOpts="all,help,bypass,test"
 
 # Check for bad args
 getopt -Q --name=$pzero -o $shortOpts -l $longOpts -- "$@" || show_help
@@ -156,35 +187,67 @@ if [[ $bypassWarning != y ]]; then
   echo
 fi
 
-# Get UUID of root filesystem (if all systems had findmnt, this would be easier)
-rootDevUUID=$(blkid -o export $(mount | grep -w / | cut -f1) | awk -F= '/UUID=/ {print $2}')  # Oldskool rhel5
+# Set TMPDIR env variable so nothing fails if /tmp becomes inaccessible
+export TMPDIR=$(mktemp -d --tmpdir=/dev/shm)
 
-# GOAL: If wiping rootfs dev requested, do it LAST
-# So, basically we're reorganizing the $deviceList so that the rootfs dev (if specified) is last
-for dev in $deviceList; do
-  if blkid -t UUID=$rootDevUUID $dev &>/dev/null; then
-    rootDevPath=$dev
+# Tempfile for dumpe2fs output
+dumpe2fs_output_file=$TMPDIR/dumpe2fs_output
+
+# Check to see if we'll be wiping any fs containing crucial commands
+crucialCommands="blkid cat cut rm dumpe2fs column dd"
+for devpath in $(df $(type -P $crucialCommands) | awk '/^\/dev/ {print $1}' | sort -u); do
+  UUID=$(blkid -o export $devpath | awk -F= '/UUID=/ {print $2}')
+  for dev in $deviceList; do
+    if blkid -t UUID=$UUID $dev &>/dev/null; then
+      saveCommands=yes
+      break 2
+    fi
+  done
+done
+
+# If wiping fs containing commands we need, copy them to TMPDIR
+for cmd in $crucialCommands; do
+  if [[ $saveCommands == yes ]]; then  
+    cp -a $(type -P $cmd) $TMPDIR
+    eval $cmd=$TMPDIR/$cmd
   else
-    dL+="$dev "
+    eval $cmd=$cmd
   fi
 done
-[[ -n $rootDevPath ]] && deviceList="$dL $rootDevPath"
 
-# FINALLY
-# Iterate over devices
+# Delete tempdir
+trap "$rm -rf $TMPDIR 2>/dev/null" EXIT
+
+# FINALLY, iterate over devices
 for dev in $deviceList; do
+  
   # Make sure device is ext
   test_dev_contains_extfs $dev
-  blockSize=$(get_block_size $dev)
-  echo "  Block size detected as ${blockSize}b"
+  
+  >$dumpe2fs_output_file
+  $dumpe2fs $dev 2>/dev/null >$dumpe2fs_output_file
+  
+  echo "  Wiping block bitmaps at block numbers..."
+  wipe_blocks $dev $(get_block_bitmaps $dev)
+  
+  echo "  Wiping inode bitmaps at block numbers..."
+  wipe_blocks $dev $(get_inode_bitmaps $dev)
+  
+  echo "  Wiping inode tables at block number ranges..."
+  wipe_inode_tables $dev
+  
   echo "  Wiping primary and backup superblocks at block numbers..."
-  # Wipe superblocks, printing as it goes
-  wipe_superblocks $dev
+  superblockList=$(get_superblocks $dev)
+  wipe_blocks $dev $superblockList
+  
   echo "  Wipe finished"
-  if [[ $skipSuperBlockCheck != y ]]; then
+  
+  if [[ $doSuperBlockTest == y ]]; then
     echo "  Confirming all superblocks wiped..."
-    check_superblocks $dev
+    check_superblocks $dev $superblockList
   fi
+  
   echo
+  
 done
 
