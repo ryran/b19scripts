@@ -1,5 +1,5 @@
 #!/bin/bash
-# zape2fs v0.1.1 last mod 2013/10/21
+# zape2fs v0.1.2 last mod 2013/10/22
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2013 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
@@ -20,21 +20,24 @@ version=$(sed '2q;d' $0)  # Version from line 2
 
 show_help() {
   echo "Usage: $pzero [-Y|--bypass] [-t|--test] -a|--all|DEVICE...
-Quickly render data on ext filesystems irrecoverable
+Quickly render data on ext filesystems virtually irrecoverable
 
-With -a or --all: blkid is used to detect and select all ext[234] filesystems.
-Otherwise, devices must be specified manually.
-Either way, the selected devices will be listed and a warning prompt will
-require confirmation to continue with the wiping.
-To bypass the warning prompt, use -Y or --bypass; in that case, no warning or
-chance to review selected devices and abort will be given.
+With -a or --all: blkid is used to detect and select all ext[234] filesystems
+Otherwise, devices must be specified manually
 
-Root access will of course be required; dumpe2fs is used to detect the block
-locations of inode/block bitmaps, inode tables, superblocks and dd is then
-used to overwrite those locations with zeros or random data.
+Selected/auto-detected devices will be listed and a warning prompt will require
+confirmation to continue with the wiping
 
-With -t or --test, after wiping all superblocks on a device, each superblock
-will be tested with dumpe2fs to ensure they were properly wiped.
+With -Y or --bypass: warning prompt is skipped and no warning or chance to
+review selected devices and abort will be given
+
+With -t or --test: after wiping everything, including all superblocks, each
+superblock will be tested with dumpe2fs to ensure they were properly wiped
+
+Root access will of course be required -- dumpe2fs is used to detect the block
+locations of inode/block bitmaps, inode tables, and superblocks; dd is then
+used to overwrite those locations with zeros or random data
+
 
 YOU USE THIS SOFTWARE AT YOUR OWN RISK
 
@@ -53,7 +56,8 @@ test_dev_contains_extfs() {
   local blkidOutput TYPE
   if blkidOutput=$($blkid -o export $1); then
     eval $blkidOutput
-    echo "$1 contains $TYPE filesystem"
+    echo "------------------------------------------------------"
+    echo -e "$1 contains $TYPE filesystem\n"
     if [[ ${TYPE%?} == ext ]] && $dumpe2fs -h $1 &>/dev/null; then
       :
     else
@@ -97,7 +101,7 @@ wipe_blocks() {
     printf "$block "
     $dd if=/dev/urandom bs=$(get_block_size $device) count=1 seek=$block of=$device &>/dev/null
   done
-  echo
+  echo -e "\n"
 }
 
 wipe_inode_tables() {
@@ -110,7 +114,7 @@ wipe_inode_tables() {
     printf "$start-$end "
     $dd if=/dev/zero bs=$(get_block_size $device) count=$count seek=$start of=$device &>/dev/null
   done <<<"$(get_inode_tables $device)"
-  echo 
+  echo -e "\n"
 }
 
 check_superblocks() {
@@ -123,6 +127,7 @@ check_superblocks() {
        echo "✔  Invalid filesystem superblock"
     fi
   done | $column -ts❚
+  echo
 }
 
 parse_positional_params() {
@@ -240,14 +245,12 @@ for dev in $deviceList; do
   superblockList=$(get_superblocks $dev)
   wipe_blocks $dev $superblockList
   
-  echo "  Wipe finished"
+  echo -e "  Wipe finished\n"
   
   if [[ $doSuperBlockTest == y ]]; then
     echo "  Confirming all superblocks wiped..."
     check_superblocks $dev $superblockList
   fi
-  
-  echo
   
 done
 
