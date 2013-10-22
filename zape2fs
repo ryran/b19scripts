@@ -1,5 +1,5 @@
 #!/bin/bash
-# zape2fs v0.1.2 last mod 2013/10/22
+# zape2fs v0.1.3 last mod 2013/10/22
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2013 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
@@ -22,22 +22,24 @@ show_help() {
   echo "Usage: $pzero [-Y|--bypass] [-t|--test] -a|--all|DEVICE...
 Quickly render data on ext filesystems virtually irrecoverable
 
-With -a or --all: blkid is used to detect and select all ext[234] filesystems
-Otherwise, devices must be specified manually
+Upon execution, $pzero will print back the names of selected devices and a
+warning prompt will require confirmation to initiate wiping them
 
-Selected/auto-detected devices will be listed and a warning prompt will require
-confirmation to continue with the wiping
+Options:
 
-With -Y or --bypass: warning prompt is skipped and no warning or chance to
-review selected devices and abort will be given
+  -a, --all  blkid will be used to detect and select all ext[234] filesystems
+             Otherwise, devices must be specified manually
 
-With -t or --test: after wiping everything, including all superblocks, each
-superblock will be tested with dumpe2fs to ensure they were properly wiped
+  -Y, --bypass  Warning prompt will be skipped and no warning or chance to
+                review selected devices and abort will be given
 
-Root access will of course be required -- dumpe2fs is used to detect the block
-locations of inode/block bitmaps, inode tables, and superblocks; dd is then
-used to overwrite those locations with zeros or random data
+  -t, --test  After wiping everything including all superblocks, each
+              superblock will be tested with dumpe2fs to ensure proper wiping
 
+Note: To run $pzero successfully, root access will of course be required
+      dumpe2fs is used to detect the block locations of inode/block bitmaps,
+      inode tables, and superblocks; dd is then used to overwrite those
+      locations with zeros or random data
 
 YOU USE THIS SOFTWARE AT YOUR OWN RISK
 
@@ -75,23 +77,23 @@ dumpe2fs_command() {
 }
 
 get_block_size() {
-  dumpe2fs_command | awk '/Block size:/ {print $3; exit}'
+  dumpe2fs_command | $awk '/Block size:/ {print $3; exit}'
 }
 
 get_block_bitmaps() {
-  dumpe2fs_command | awk '/Block bitmap at/ {print gensub(/.* Block bitmap at ([0-9]+) .*/, "\\1", 1)}' 
+  dumpe2fs_command | $awk '/Block bitmap at/ { print gensub(/.* Block bitmap at ([0-9]+) .*/, "\\1", 1) }' 
 }
 
 get_inode_bitmaps() {
-  dumpe2fs_command | awk '/Inode bitmap at/ {print gensub(/.* Inode bitmap at ([0-9]+) .*/, "\\1", 1)}' 
+  dumpe2fs_command | $awk '/Inode bitmap at/ { print gensub(/.* Inode bitmap at ([0-9]+) .*/, "\\1", 1) }' 
 }
 
 get_inode_tables() {
-  dumpe2fs_command | awk '/Inode table at/ {print gensub(/.* Inode table at ([0-9]+)-([0-9]+) .*/, "\\1 \\2", 1)}'
+  dumpe2fs_command | $awk '/Inode table at/ { print gensub(/.* Inode table at ([0-9]+)-([0-9]+) .*/, "\\1 \\2", 1) }'
 }
 
 get_superblocks() {
-  dumpe2fs_command | awk '/superblock/ {print gensub(/.* superblock at ([0-9]+), .*/, "\\1", 1)}'
+  dumpe2fs_command | $awk '/superblock/ { print gensub(/.* superblock at ([0-9]+), .*/, "\\1", 1) }'
 }
 
 wipe_blocks() {
@@ -131,7 +133,7 @@ check_superblocks() {
 }
 
 parse_positional_params() {
-  unset doAutodetect bypassWarning doSuperBlockTest
+  unset doAutodetect bypassWarning doSuperblockTest
   until [[ $1 == -- ]]; do
     case $1 in
       -a|--all)     doAutodetect=y
@@ -140,13 +142,16 @@ parse_positional_params() {
     ;;
       -Y|--bypass)  bypassWarning=y
     ;;
-      -t|--test)    doSuperBlockTest=y
+      -t|--test)    doSuperblockTest=y
     esac
     shift
   done
   shift
   deviceList=$@
 }
+
+# Set TMPDIR env variable so bash can do its thing even if /tmp is inaccessible
+export TMPDIR=/dev/shm
 
 # getopt options
 shortOpts="ahYt"
@@ -192,14 +197,14 @@ if [[ $bypassWarning != y ]]; then
   echo
 fi
 
-# Set TMPDIR env variable so nothing fails if /tmp becomes inaccessible
+# Create sub tempdir in /dev/shm
 export TMPDIR=$(mktemp -d --tmpdir=/dev/shm)
 
 # Tempfile for dumpe2fs output
 dumpe2fs_output_file=$TMPDIR/dumpe2fs_output
 
 # Check to see if we'll be wiping any fs containing crucial commands
-crucialCommands="blkid cat cut rm dumpe2fs column dd"
+crucialCommands="blkid cat cut rm dumpe2fs column dd awk"
 for devpath in $(df $(type -P $crucialCommands) | awk '/^\/dev/ {print $1}' | sort -u); do
   UUID=$(blkid -o export $devpath | awk -F= '/UUID=/ {print $2}')
   for dev in $deviceList; do
@@ -211,9 +216,10 @@ for devpath in $(df $(type -P $crucialCommands) | awk '/^\/dev/ {print $1}' | so
 done
 
 # If wiping fs containing commands we need, copy them to TMPDIR
+# From testing, this is often unnecessary, but better to avoid the fringe cases
 for cmd in $crucialCommands; do
   if [[ $saveCommands == yes ]]; then  
-    cp -a $(type -P $cmd) $TMPDIR
+    cp -a $(type -P $cmd) $TMPDIR 2>/dev/null
     eval $cmd=$TMPDIR/$cmd
   else
     eval $cmd=$cmd
@@ -247,7 +253,7 @@ for dev in $deviceList; do
   
   echo -e "  Wipe finished\n"
   
-  if [[ $doSuperBlockTest == y ]]; then
+  if [[ $doSuperblockTest == y ]]; then
     echo "  Confirming all superblocks wiped..."
     check_superblocks $dev $superblockList
   fi
