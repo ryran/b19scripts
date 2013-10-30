@@ -1,5 +1,5 @@
 #!/bin/bash
-# snapbak v0.2.2 last mod 2013/10/29
+# snapbak v0.2.3 last mod 2013/10/29
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2013 Ryan Sawhill <rsaw@redhat.com>
 #
@@ -262,7 +262,9 @@ if [[ -n $CurrentStorageFile ]]; then
   Print "In which volume group should the new logical volume be created?"
   read -p "> " VolGroup
   Print "What name should the new logical volume be given?"
+  Print "[ press Enter to use the guest name '$VirtGuestName' ]"
   read -p "> " LogVol
+  [[ -z $LogVol ]] && LogVol=$VirtGuestName
   Print "What size should the new logical volume have? (Use size suffixes as in lvcreate)"
   Print "[ press Enter to use autodetected size of ${StorageFileSize}M ]"
   read -p "> " LogVolSize
