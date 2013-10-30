@@ -1,5 +1,5 @@
 #!/bin/bash
-# snapbak v0.2.0 last mod 2013/04/22
+# snapbak v0.2.2 last mod 2013/10/29
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2013 Ryan Sawhill <rsaw@redhat.com>
 #
@@ -52,15 +52,33 @@ Wait_Destroy() {
   done
 }
 
+Remove_Snapshot() {
+  # Remove snapshot storage (passed as first argument) if it already exists
+  if [[ -e $1 ]]; then
+    echo -e "\nRemoving snapshot logical volume '$1' ..."
+    lvremove -f $1
+    while [[ -e $1 ]]; do
+      echo "Waiting for snapshot removal ..."
+      (sleep 2; echo y) | lvremove $1
+      sleep 3
+    done
+  fi
+}
+
 Print() {
-  printf "${B}";  fold -sw100 <<<"$@" | sed '1!s/^/  /';  printf "${R}"
+  printf "${B}";  fold -sw $(($(tput cols)-5)) <<<"$@" | sed '1!s/^/  /';  printf "${R}"
 }
 
 Prompt() {
   local REPLY
-  read -p "$@ "
-  [[ $REPLY != y ]] && { echo Aborting; exit; }
+  if [[ $SkipPrompts == true ]]; then
+    echo "$@ y"
+  else
+    read -p "$@ "
+    [[ $REPLY != y ]] && { echo Aborting; exit; }
+  fi
 }
+
 
 # Help page
 Help_Usage() {
@@ -93,6 +111,9 @@ logical volume for the guest to use in place of said image file
    original LV and finally reconfigure the guest to use THAT new snapshot
    
 ${B}OPTIONS:${R}
+
+  ${B}-y${R}, ${B}--yes${R}
+      Use this option to skip confirmation prompts, when possible
       
   ${B}-d${R}, ${B}--dev${R}=<StorageDeviceLV>
       Use this option to be explicit about which block device to focus on
@@ -107,13 +128,17 @@ ${B}OPTIONS:${R}
       Use this option to have ${B}lvconvert${R} merge a guest's snapshot back into
       the origin logical volume (aborts if guest is not already using snapshot)
 
+  ${B}-r${R}, ${B}--revert${R}
+      Use this option to destroy a guest's snapshot and revert it back to using
+      the origin logical volume (aborts if guest is not already using snapshot)
+
 Version info: ${version:2}
 See <http://github.com/ryran/b19scripts> to report bugs or suggestions"
 }
 
 # Declare getopt short and long options
-sopts='d:L:mh'
-lopts='dev:,size:,merge,help'
+sopts='yd:L:mrh'
+lopts='yes,dev:,size:,merge,revert,help'
 
 # Check for bad switches
 getopt -Q --name=$pzero -o $sopts -l $lopts -- "$@" || { Help_Usage; exit 64; }
@@ -122,9 +147,11 @@ getopt -Q --name=$pzero -o $sopts -l $lopts -- "$@" || { Help_Usage; exit 64; }
 PARSE() {
   until [[ $1 = -- ]]; do
     case $1 in
-      -d|--dev)    StorageDeviceLV=$2; shift 2 ;;
-      -L|--size)   SnapshotCOWSize=$2; shift 2 ;;
-      -m|--merge)  MergeSnapshot=true; shift 1 ;;
+      -y|--yes)    SkipPrompts=true;    shift 1 ;;
+      -d|--dev)    StorageDeviceLV=$2;  shift 2 ;;
+      -L|--size)   SnapshotCOWSize=$2;  shift 2 ;;
+      -m|--merge)  MergeSnapshot=true;  shift 1 ;;
+      -r|--revert) RevertToOrigin=true; shift 1 ;;
       -h|--help)   Help_Usage; exit
     esac
   done
@@ -313,14 +340,46 @@ if [[ -n $LVM2_ORIGIN ]]; then  # If CurrentStorage has an origin, it's a snapsh
     Prompt "Continue? [y/n]"
     # Need to shutdown guest before merging
     Wait_Shutdown $VirtGuestName
+    # Merge time
     lvconvert --merge $SnapshotLV
+  fi
+
+  # These 2 if blocks (above and below) are separate to allow using --merge and --revert simultaneously
   
-  else
-    # If not doing a merge, it's time to re-make the snapshot
+  if [[ $RevertToOrigin == true ]]; then  # $RevertToOrigin set via cmdline args
+    # If we're getting rid of snapshots and going back to original lv
+    Print "THIS WILL DESTROY GUEST '$VirtGuestName' AND RE-CONFIGURE IT TO USE NON-SNAPSHOTTED LVM STORAGE"
+    Prompt "Continue? [y/n]"
+    # Kill guest as quickly as possible, since we're reverting to origin anyway
+    Wait_Destroy $VirtGuestName
+    # Kill snapshot lv
+    Remove_Snapshot $SnapshotLV
+    
+    # Get fresh xml without all the transitory nonsense present in a running guest
+    virsh dumpxml $VirtGuestName >$XML
+    
+    # Change guest to use origin storage
+    sed -i "/source dev='${CurrentStorage////\\/}'/s,$CurrentStorage,$OriginLV," $XML
+    virsh undefine $VirtGuestName
+    virsh define $XML
+    
+    # Start guest
+    echo -e "\nStarting guest '$VirtGuestName' using original non-snapshot LVM storage ..."
+    virsh start $VirtGuestName &>/dev/null
+    
+    # Finished
+    Print DONE
+    exit
+  fi
+   
+  if [[ $MergeSnapshot != true ]]; then
+    # If not doing a merge, it's time to destroy the snapshot
     Print "THIS WILL DESTROY GUEST '$VirtGuestName' AND RE-CREATE ITS SNAPSHOT"
     Prompt "Continue? [y/n]"
     # Kill guest as quickly as possible, since we're resetting it anyway
     Wait_Destroy $VirtGuestName
+    # Kill snapshot lv
+    Remove_Snapshot $SnapshotLV
   fi
   
 else
@@ -343,17 +402,6 @@ else
   virsh define $XML
 fi
 
-
-# Remove snapshot storage if it already exists
-if [[ -e $SnapshotLV ]]; then
-  echo -e "\nRemoving snapshot logical volume '$SnapshotLV' ..."
-  lvremove -f $SnapshotLV
-  while [[ -e $SnapshotLV ]]; do
-    echo "Waiting for snapshot removal ..."
-    (sleep 2; echo y) | lvremove $SnapshotLV
-    sleep 3
-  done
-fi
 
 # Create snapshot
 echo -e "\nCreating fresh snapshot '$SnapshotLV' of origin '$OriginLV' ..."
