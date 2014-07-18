@@ -1,6 +1,6 @@
 #!/bin/bash
-# valine v0.1.1 last mod 2014/07/17
-# Latest version at <http://people.redhat.com/rsawhill/rpms/>
+# valine v0.2.1 last mod 2014/07/18
+# Latest version at <https://github.com/ryran/b19scripts>
 # Copyright 2014 Ryan Sawhill <rsaw@redhat.com>
 #
 #    This program is free software: you can redistribute it and/or modify
@@ -25,6 +25,15 @@ version=$(sed '2q;d' ${0})
 B='\033[1;1m'  # bold
 R='\033[0;0m'  # reset
 
+# Some global variables
+skipPrompts=false
+allDomains=false
+startDomains=true
+declare -i numTimesTrapTriggered=0
+# GNU getopt short and long options
+sOpts='ah'
+lOpts='all,off,help'
+
 Print() {
     echo -e "${B}${@}${R}"
 }
@@ -40,33 +49,55 @@ Prompt() {
     fi
 }
 
-wait_for_shutdown() {
-    # Shutdown guest passed as first argument
-    echo "  Shutting down domain ${1} ..."
-    virsh shutdown ${1} &>/dev/null
+wait_for_domid_turn_to_dash() {
+    local -i count
+    [[ ${parallelize} == false ]] && printProgress="printf ."
     until [[ $(virsh domid ${1}) == - ]]; do
-        echo "    Waiting for domain to shut down gracefully ..."
-        sleep 2
+        count+=1
+        sleep .5
+        ${printProgress}
+        case ${count} in
+            8)   echo; echo -e "      ${Domain}: Waiting for domain to turn off" ;;
+            30)  echo; echo -e "      ${Domain}: Domain has not yet turned off (still waiting)" ;;
+            120) echo; echo -e "      ${Domain}: Domain has not yet turned off\n        Consider manual intervention on the domain's serial or physical console" ;;
+            340) echo; echo -e "      ${Domain}: Domain still has not turned off\n        Manual intervention on the console is probably required\n        No more warnings will be printed" ;;
+        esac
     done
 }
 
+wait_for_shutdown() {
+    if [[ ${parallelize} == true ]]; then
+        virsh shutdown ${1} &>/dev/null
+        wait_for_domid_turn_to_dash ${1}
+    else
+        echo "  Shutting down domain"
+        virsh shutdown ${1} &>/dev/null
+        printf "    Waiting for domain to shut down gracefully ..."
+        wait_for_domid_turn_to_dash ${1}
+    fi
+    echo
+}
+
 wait_for_destroy() {
-    # Destroy guest passed as first argument
-    echo "  Forcefully terminating domain ${1} ..."
-    virsh destroy ${1} &>/dev/null
-    until [[ $(virsh domid ${1}) == - ]]; do
-        echo "    Waiting for domain to terminate ..."
-        sleep 2
-    virsh destroy ${1} &>/dev/null
-    done
+    if [[ ${parallelize} == true ]]; then
+        virsh destroy ${1} &>/dev/null
+        wait_for_domid_turn_to_dash ${1}
+    else
+        echo "  Forcefully terminating domain"
+        virsh destroy ${1} &>/dev/null
+        printf "    Waiting for domain to terminate ..."
+        wait_for_domid_turn_to_dash ${1}
+    fi
+    echo
 }
 
 show_usage() {
     echo -e "${B}Usage: ${pzero}
        ${pzero} DOMAIN
        ${pzero} DOMAIN {list|new|revert}
-       ${pzero} DOMAIN {revert|delete} SNAPSHOT_NAME
-       ${pzero} DOMAIN {start|shutdown|destroy|console}${R}"
+       ${pzero} DOMAIN {revert|Delete} SNAPSHOT_NAME
+       ${pzero} DOMAIN {start|shutdown|destroy|console}
+       ${pzero} --all {new|revert|start|shutdown|destroy}${R}"
 }
 
 show_help() {
@@ -75,59 +106,67 @@ show_help() {
 Simple img-file snapshot-mgmt with intelligent BASH tab-completion
 
 ${B}With no arguments:${R}
-
-  ${B}${pzero}${R} by itself displays summary of all domains & their snapshots
+ ┐
+ │${B}${pzero}${R} by itself displays summary of all domains & their snapshots
+ └──────────────────────────────────────────────────────────────────────────────
 
 ${B}Snapshotting with ${pzero}:${R}
-
-  ${B}${pzero} DOMAIN${R}                               (YES confirmation prompt)
-      if DOMAIN has zero snapshots, runs: ${pzero} DOMAIN new
-      if DOMAIN has any snapshots, runs:  ${pzero} DOMAIN revert
-
-  ${B}${pzero} DOMAIN {list|l}${R}
-      runs:
-            virsh snapshot-list DOMAIN --parent
-
-  ${B}${pzero} DOMAIN {new|n}${R}                       (NO confirmation prompt)
-      runs:
-            virsh shutdown DOMAIN                 (and waits)
-            virsh snapshot-create DOMAIN
-            virsh start DOMAIN
-
-  ${B}${pzero} DOMAIN {revert|r}${R}                    (NO confirmation prompt)
-      runs:
-            virsh destroy DOMAIN
-            virsh snapshot-revert DOMAIN --current
-            virsh start DOMAIN
-
-  ${B}${pzero} DOMAIN {revert|r} SNAPSHOT_NAME${R}      (NO confirmation prompt)
-      runs:
-            virsh destroy DOMAIN
-            virsh snapshot-revert DOMAIN SNAPSHOT_NAME
-            virsh start DOMAIN
-
-  ${B}${pzero} DOMAIN {delete|e} SNAPSHOT_NAME${R}      (YES confirmation prompt)
-      runs:
-            virsh snapshot-delete DOMAIN SNAPSHOT_NAME
-
-  For more on managing snapshots:
-      Virtualization Deployment & Administration Guide @ http://red.ht/1kwfbJs 
+ ┐
+ │${B}${pzero} DOMAIN [--off]${R}                                       (YES confirmation)
+ │    if DOMAIN has zero snapshots, runs:  ${pzero} DOMAIN new
+ │    if DOMAIN has any snapshots, runs:   ${pzero} DOMAIN revert
+ │
+ │${B}${pzero} DOMAIN {list|l}${R}
+ │    runs:
+ │          virsh snapshot-list DOMAIN --parent
+ │
+ │${B}${pzero} DOMAIN {new|n} [--off]${R}                               (NO confirmation)
+ │    runs:
+ │          virsh shutdown DOMAIN                             (and waits)
+ │          virsh snapshot-create DOMAIN
+ │          virsh start DOMAIN                                (except w/ --off)
+ │
+ │${B}${pzero} DOMAIN {revert|r} [--off]${R}                            (NO confirmation)
+ │    runs:
+ │          virsh destroy DOMAIN
+ │          virsh snapshot-revert DOMAIN --current
+ │          virsh start DOMAIN                                (except w/ --off)
+ │
+ │${B}${pzero} DOMAIN {revert|r} SNAPSHOT_NAME [--off]${R}              (NO confirmation)
+ │    runs:
+ │          virsh destroy DOMAIN
+ │          virsh snapshot-revert DOMAIN SNAPSHOT_NAME
+ │          virsh start DOMAIN                                (except w/ --off)
+ │
+ │${B}${pzero} DOMAIN {Delete|D} SNAPSHOT_NAME${R}                      (YES confirmation)
+ │    runs:
+ │          virsh snapshot-delete DOMAIN SNAPSHOT_NAME
+ │
+ │For more on managing snapshots:
+ │    Virtualization Deployment & Administration Guide @ http://red.ht/1kwfbJs 
+ └──────────────────────────────────────────────────────────────────────────────
 
 ${B}Starting/stopping/accessing domains with ${pzero}:${R}
-  
-  ${B}${pzero} DOMAIN {start|s} | {shutdown|h} | {destroy|d} | {console|c}${R}
-
-  start, shutdown, destroy, console commands are available as a convenience due
-  to virsh's lack of intelligent BASH tab-completion
+ ┐
+ │${B}${pzero} DOMAIN {start|s} | {shutdown|h} | {destroy|d} | {console|c}${R}
+ │
+ │start, shutdown, destroy, console commands are available as a convenience due
+ │to virsh's lack of intelligent BASH tab-completion
+ └──────────────────────────────────────────────────────────────────────────────
 
 ${B}Managing ALL domains at once with ${pzero}:${R}
-  
-  ${B}${pzero} --all [ {new|n} | {revert|r} | {start|s} | {shutdown|h} | {destroy|d} ]${R}
-  
-  Replace DOMAIN with '--all' (or '-a') to operate on all detected domains
-  Does not work with {console|c} or {delete|e}
-  Omitting command is OK, leads to behavior described for ${B}${pzero} DOMAIN${R}
-       
+ ┐  
+ │${B}${pzero} --all [ {new|n} | {revert|r} | {start|s} | {shutdown|h} | {destroy|d} ]${R}
+ │
+ │Replace DOMAIN with '--all' (or '-a') to operate on all detected domains in
+ │parallel (jobs are backgrounded, verbose output is lessened, and cancelling
+ │requires double Ctrl-c)
+ │Does not work with {console|c} or {Delete|D}
+ │The --off switch is optional with {new|n} | {revert|r}
+ │Omitting command (e.g., {new|n} is OK (with or without --off) and leads to
+ │same behavior described for ${B}${pzero} DOMAIN${R}
+ └──────────────────────────────────────────────────────────────────────────────
+ 
 ${B}Version info: ${version:2}${R}
   See <http://github.com/ryran/b19scripts> to report bugs or suggestions"
 }
@@ -144,118 +183,58 @@ list_virts_and_snapshots() {
         echo "❚❚"
     } |
         column -t -s "❚" -o " │ " |
-            sed -e '/|/d' -e 's/+- /\\_/' \
+            sed -e '/|/d' -e 's/+-/\\_/' \
                 -e '1 s/│/┬/g' -e '1 s/ /─/g' -e '1 s/$/─────────────────────/' \
                 -e '3 s/│/┼/g' -e '3 s/ /─/g' -e '3 s/$/─────────────────────/' \
                 -e '$ s/│/┴/g' -e '$ s/ /─/g' -e '$ s/$/─────────────────────/'
 }
 
-list_snaps() {
-    virsh snapshot-list ${Domain} ${@}
-}
-
 new_snap() {
-    Print "Domain ${Domain} must be shutdown in order to create new snapshot"
+    Print "${Domain}: Must be shut down in order to create new snapshot"
     wait_for_shutdown ${Domain}
-    Print "Creating new snapshot"
-    printf "  "
+    Print "${Domain}: Creating new snapshot and tagging it as current"
+    [[ ${parallelize} == false ]] && printf "  "
     virsh snapshot-create ${Domain}
-    Print "Starting domain with new snapshot"
-    printf "  "
-    virsh start ${Domain}
+    if [[ ${startDomains} == true ]]; then
+        Print "${Domain}: Starting with pristine snapshot"
+        [[ ${parallelize} == false ]] && printf "  "
+        virsh start ${Domain}
+    fi
 }
 
 revert_snap() {
     if [[ -n ${1} ]]; then
-        if ! list_snaps --name | grep -q "^${1}"; then
-            Print "Error: Invalid snapshot name '${1}'"
-            echo "Available snapshots for domain ${Domain}:"
-            list_snaps --parent
-            exit 64
-        fi
-        Print "Domain ${Domain} must be off in order to revert to old snapshot"
+        Print "${Domain}: Must be off to revert to old snapshot"
         wait_for_destroy ${Domain}
-        Print "Reverting domain to snapshot ${1}"
+        Print "${Domain}: Reverting to snapshot ${1}"
         virsh snapshot-revert ${Domain} "${1}"
     else
-        Print "Domain ${Domain} must be off in order to revert to old snapshot"
+        Print "${Domain}: Must be off to revert to snapshot"
         wait_for_destroy ${Domain}
-        Print "Reverting domain to current snapshot"
+        Print "${Domain}: Reverting to current snapshot"
         virsh snapshot-revert ${Domain} --current
     fi
-    Print "Starting domain with new snapshot"
-    printf "  "
-    virsh start ${Domain}
+    if [[ ${startDomains} == true ]]; then
+        Print "${Domain}: Starting with pristine snapshot"
+        [[ ${parallelize} == false ]] && printf "  "
+        virsh start ${Domain}
+    fi
 }
 
 delete_snap() {
-    if [[ -n ${1} ]]; then
-        if ! list_snaps --name | grep -q "^${1}"; then
-            Print "Error: Invalid snapshot name '${1}'"
-            echo "Available snapshots for domain ${Domain}:"
-            list_snaps --parent
-            exit 64
-        fi
-        Print "About to remove snapshot ${1} from domain ${Domain}"
-        Prompt "  Continue?" \
-            && virsh snapshot-delete ${Domain} "${1}"
-    else
-        Print "Error: Must specify snapshot name to delete"
-        exit 64
-    fi
-}
-
-sanity_check_args() {
-    if [[ ${1} == --help || ${1} == -h ]]; then
-        show_help
-        exit
-    elif [[ -z ${1} ]]; then
-        show_usage
-        echo
-        list_virts_and_snapshots
-        exit 0
-    elif [[ ${UID} != 0 ]]; then
-        # Quit if not root
-        Print "Error: Need root privileges for 'virsh' commands"
-        exit 77
-    elif [[ ${1} != --all ]] && ! virsh list --all --name | grep -q "^${1}$"; then
-        # Quit if improper guest name
-        Print "Error: DOMAIN '${1}' not recognized"
-        echo "Available domains:"
-        virsh list --all --name | sed -e /^$/d -e 's/^/  • /' 
-        exit 64
-    elif [[ ${1} == --all ]]; then
-        case "${2}" in
-            console|c)
-                Print "Error: 'console' command not compatible with --all"
-                exit 64
-                ;;
-            delete|e)
-                Print "Error: 'delete' command not compatible with --all"
-                exit 64
-                ;;
-            list|l)
-                list_virts_and_snapshots
-                exit
-                ;;
-            new|n|revert|r|start|s|shutdown|h|destroy|d)
-                :
-                ;;
-            *)
-                if [[ -n ${2} ]]; then
-                    Print "Error: improper arguments"
-                    echo
-                    show_usage
-                    exit 64
-                fi
-        esac
-    fi
-    Domain=${1}
+    Print "About to remove snapshot ${1} from domain ${Domain}"
+    Prompt "  Continue?" \
+        && virsh snapshot-delete ${Domain} "${1}"
 }
 
 case_thru_args() {
+    case ${1} in
+        -bg)  parallelize=true ;;
+          *)  parallelize=false ;;
+    esac
+    shift
     if [[ -z ${1} ]]; then
-        if [[ -n $(list_snaps --name) ]]; then
+        if [[ -n $(virsh snapshot-list "${Domain}" --name) ]]; then
             Print "Default behavior would revert domain ${Domain} to its current snapshot"
             Prompt "  Continue?" \
                 && revert_snap
@@ -267,7 +246,7 @@ case_thru_args() {
     else
         case "${1}" in
             list|l)
-                list_snaps --parent
+                virsh snapshot-list "${Domain}" --parent
                 ;;
             new|n)
                 new_snap
@@ -275,23 +254,23 @@ case_thru_args() {
             revert|r)
                 revert_snap "${2}"
                 ;;
-            delete|e)
+            Delete|D)
                 delete_snap "${2}"
                 ;;
             start|s)
-                virsh start ${Domain}
+                virsh start "${Domain}"
                 ;;
             shutdown|h)
-                virsh shutdown ${Domain}
+                virsh shutdown "${Domain}"
                 ;;
             destroy|d)
-                virsh destroy ${Domain}
+                virsh destroy "${Domain}"
                 ;;
             console|c)
-                exec virsh console ${Domain}
+                exec virsh console "${Domain}"
                 ;;
             *)
-                Print "Error: improper arguments"
+                Print "Error: improper argument '${1}'"
                 echo
                 show_usage
                 exit 64
@@ -299,17 +278,130 @@ case_thru_args() {
     fi
 }
 
-main() {
-    sanity_check_args "${@}"
-    shift
-    if [[ ${Domain} == --all ]]; then
-        trap 
-        for Domain in $(virsh list --all --name); do
-            case_thru_args "${@}"
-        done
+cleanup_bg_jobs() {
+    numTimesTrapTriggered+=1
+    if [[ ${numTimesTrapTriggered} -eq 1 ]]; then
+        echo
+        Print "${pzero}: Background jobs still running"
+        echo "  Hit Ctrl-c again to cancel all bg jobs & quit"
+        sleep 1d
     else
-        case_thru_args "${@}"
+        echo
+        Print "${pzero}: Aborting background jobs"
+        pkill --pgroup 0
+    fi
+
+}
+
+sanity_check_args() {
+    if [[ ${UID} != 0 ]]; then
+        Print "Error: Need root privileges for 'virsh' commands"
+        exit 77
+    elif [[ ${allDomains} == true ]]; then
+        case "${1}" in
+            console|c)
+                Print "Error: 'console' command not compatible with --all"
+                exit 64
+                ;;
+            Delete|D)
+                Print "Error: 'delete' command not compatible with --all"
+                exit 64
+                ;;
+            list|l)
+                list_virts_and_snapshots
+                exit
+                ;;
+            revert|r)
+                if [[ -n ${2} ]]; then
+                    Print "Error: specifying snapshot name with 'revert' command not allowed with --all"
+                    exit 64
+                fi
+                ;;
+            new|n|start|s|shutdown|h|destroy|d)
+                :
+                ;;
+            *)
+                if [[ -n ${1} ]]; then
+                    Print "Error: improper argument '${1}'"
+                    echo
+                    show_usage
+                    exit 64
+                fi
+        esac
+    elif [[ -z ${1} ]]; then
+        show_usage
+        echo
+        list_virts_and_snapshots
+        exit
+    elif ! virsh list --all --name | grep -q "^${1}$"; then
+        Print "Error: DOMAIN '${1}' not recognized"
+        echo "Available domains:"
+        virsh list --all --name | sed -e /^$/d -e 's/^/  • /' 
+        exit 64
+    elif [[ ${2} == revert || ${2} == r || ${2} == Delete || ${2} == D ]]; then
+        if [[ -n ${3} ]]; then
+            if ! virsh snapshot-list "${1}" --name | grep -q "^${3}"; then
+                Print "Error: Invalid snapshot name '${3}'"
+                echo "Available snapshots for domain ${1}:"
+                virsh snapshot-list "${1}" --parent
+                exit 64
+            fi
+        elif [[ ${2} == Delete || ${2} == D ]]; then
+            Print "Error: Must specify snapshot name to delete"
+            exit 64
+        fi
+    elif [[ -n ${3} ]]; then
+        Print "Error: improper argument '${3}'"
+        echo
+        show_usage
+        exit 64
     fi
 }
 
-main "${@}"
+main() {
+    # Parse the cmdline
+    until [[ ${1} == -- ]]; do
+        case "${1}" in
+            --all|-a)
+                shift; allDomains=true ;;
+            --off)
+                shift; startDomains=false ;;
+            --help|-h)
+                shift; show_help; exit ;;
+        esac
+    done
+    shift  # (to get rid of the '--')
+    sanity_check_args "${@}"
+    # Make shit happen
+    if [[ ${allDomains} == true ]]; then
+        # If run with --all/-a:
+        if [[ -z ${1} ]]; then
+            # If executed as: "$0 --all" (with or without --off) ...
+            # Then: walk through interactive prompts in the foreground
+            for Domain in $(virsh list --all --name); do
+                case_thru_args -fg
+            done
+        else
+            # If executed as: "$0 --all {new|revert|start|shutdown|destroy}" (with or without --off) ...
+            # Then: kick off jobs in pseudo-parallel
+            trap cleanup_bg_jobs 2
+            for Domain in $(virsh list --all --name); do
+                case_thru_args -bg "${@}" &
+            done
+            wait
+            trap 2
+        fi
+    else
+        Domain=${1}
+        shift
+        # If NOT run with --all/-a:
+        case_thru_args -fg "${@}"
+    fi
+
+}
+
+# Check for bad '-' or '--' options
+getopt -Q --name=${pzero} -o ${sOpts} -l ${lOpts} -- "${@}" || { show_usage; exit 64; }
+
+# Main thread
+main $(getopt -u --name=${pzero} -o ${sOpts} -l ${lOpts} -- "${@}")
