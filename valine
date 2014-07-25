@@ -1,5 +1,5 @@
 #!/bin/bash
-# valine v0.3.2 last mod 2014/07/25
+# valine v0.3.2a last mod 2014/07/25
 # Latest version at <https://github.com/ryran/b19scripts>
 # Copyright 2014 Ryan Sawhill <rsaw@redhat.com>
 #
@@ -289,19 +289,23 @@ _list_dom_state_and_snaps() {
         qcow2)
             line=" ${Domain} ❚${1}❚qcow2 ❚"
             line+="${primaryStorage}"
-            line+=$(
-                    if [[ -n $(virsh snapshot-list ${Domain} --name) ]]; then
-                        printf "\n❚❚❚  └─$(c)"
-                        virsh snapshot-list ${Domain} --tree |
-                            sed \
-                                -e 's,|,│,g'           \
-                                -e "s,+- ,└─$(c),"     \
-                                -e '/^[ │]*$/d'        \
-                                -e '1!s,^,❚❚❚    ,'    \
-                                -e "s,$(virsh snapshot-current ${Domain} --name),$(C)&$(R) $(__arrow),"  \
-                                -e "s,$,$(R),"
-                    fi
-                  )
+            if [[ -z $(virsh snapshot-list ${Domain} --name) ]]; then
+                line+=" $(__arrow)"
+            else
+                line+=$(
+                        if [[ -n $(virsh snapshot-list ${Domain} --name) ]]; then
+                            printf "\n❚❚❚  └─$(c)"
+                            virsh snapshot-list ${Domain} --tree |
+                                sed \
+                                    -e 's,|,│,g'           \
+                                    -e "s,+- ,└─$(c),"     \
+                                    -e '/^[ │]*$/d'        \
+                                    -e '1!s,^,❚❚❚    ,'    \
+                                    -e "s,$(virsh snapshot-current ${Domain} --name),$(C)&$(R) $(__arrow),"  \
+                                    -e "s,$,$(R),"
+                        fi
+                      )
+            fi
             ;;
     esac
     line+="\n❚❚❚\n"
