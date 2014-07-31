@@ -1,7 +1,7 @@
 # This file is part of valine, providing intelligent valine tab-completion for BASH
 # Save it to: /etc/bash_completion.d/
 #
-# Revision date:  2014/07/25 matching up with valine 0.3.2
+# Revision date:  2014/07/25 matching up with valine 0.4.0
 # 
 # Copyright 2014 Ryan Sawhill Aroha <rsaw@redhat.com>
 # 
@@ -17,9 +17,18 @@
 #
 #-------------------------------------------------------------------------------
 
-_VIRSH() {
+__v_VIRSH() {
     # When bash running as non-root, the expectation is that you have sudo nopasswd access to virsh command
     sudo virsh "${@}" 2>/dev/null
+}
+
+__v_getDomains() {
+    __v_VIRSH list --all --name
+}
+
+__v_listSnapshots() {
+    __v_VIRSH snapshot-list ${1} --name
+    source /etc/valine/${prevX2} 2>/dev/null; echo ${!isThinLv[@]}
 }
 
 _valine()  {
@@ -35,25 +44,24 @@ _valine()  {
     prev=${COMP_WORDS[COMP_CWORD-1]}
     prevX2=${COMP_WORDS[COMP_CWORD-2]}
 
-    virtDomains=$(_VIRSH list --all --name)
     
     # Check previous arg to see if we need to do anything special
     case "${prev}" in
         valine)
-            COMPREPLY=( $(compgen -W "-a --all ${virtDomains}" -- "${curr}") )
+            COMPREPLY=( $(compgen -W "-a --all $(__v_getDomains)" -- "${curr}") )
             ;;
-        --help|-h|--off|list|l|start|s|shutdown|h|destroy|d|console|c)
+        --help|-h|--off|--size|list|l|start|s|shutdown|h|destroy|d|console|c)
             ;;
         new|n)
-            COMPREPLY=( $(compgen -W "--off" -- "${curr}") )
+            COMPREPLY=( $(compgen -W "--off --size" -- "${curr}") )
             ;;
         revert|r)
             case "${prevX2}" in
                 --all|-a)
                     COMPREPLY=( $(compgen -W "--off" -- "${curr}") )  ;;
                 *)
-                    if _VIRSH list --all --name | grep -q "^${prevX2}$"; then
-                        COMPREPLY=( $(compgen -W "--off $(_VIRSH snapshot-list ${prevX2} --name)" -- "${curr}") )
+                    if __v_getDomains | grep -qs -- "^${prevX2}$"; then
+                        COMPREPLY=( $(compgen -W "--off $(__v_listSnapshots ${prevX2})" -- "${curr}" ) )
                     fi
             esac
             ;;
@@ -62,8 +70,8 @@ _valine()  {
                 --all|-a)
                     : ;;
                 *)
-                    if _VIRSH list --all --name | grep -q "^${prevX2}$"; then
-                        COMPREPLY=( $(compgen -W "$(_VIRSH snapshot-list ${prevX2} --name)" -- "${curr}") )
+                    if __v_getDomains | grep -qs -- "^${prevX2}$"; then
+                        COMPREPLY=( $(compgen -W "--off $(__v_listSnapshots ${prevX2})" -- "${curr}" ) )
                     fi
             esac
             ;;
@@ -71,7 +79,7 @@ _valine()  {
             COMPREPLY=( $(compgen -W "--off new revert start shutdown destroy" -- "${curr}") )
             ;;
         *)
-            if grep -wsq -- ${prev} &>/dev/null <<<"${virtDomains}"; then
+            if __v_getDomains | grep -qs -- "^${prev}$"; then
                 COMPREPLY=( $(compgen -W "--off list new revert Delete start shutdown destroy console" -- "${curr}") )
             fi
     esac
