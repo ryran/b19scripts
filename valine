@@ -1,5 +1,5 @@
 #!/bin/bash
-# valine v0.5.2 last mod 2014/08/22
+# valine v0.5.3 last mod 2014/08/25
 # Latest version at <https://github.com/ryran/b19scripts>
 # Copyright 2014 Ryan Sawhill <rsaw@redhat.com>
 #
@@ -124,9 +124,9 @@ wait_for_destroy() {
 show_usage() {
     echo -e "${BOLD}Usage: ${pzero}
        ${pzero} DOMAIN
-       ${pzero} DOMAIN new [SNAPSHOT_NAME] [--off] [--size LVSIZE]
-       ${pzero} DOMAIN revert [SNAPSHOT_NAME] [--off]
-       ${pzero} DOMAIN Delete SNAPSHOT_NAME
+       ${pzero} DOMAIN new [SNAP] [--off] [--size LVSIZE]
+       ${pzero} DOMAIN revert [SNAP] [--off]
+       ${pzero} DOMAIN Delete SNAP
        ${pzero} DOMAIN {start|shutdown|destroy|console}
        ${pzero} --all {new|revert|start|shutdown|destroy}${RESET}"
     [[ ${1} == +note ]] && echo -e "\nRun ${pzero} --help for full help page"
@@ -135,7 +135,7 @@ show_usage() {
 show_help() {
     show_usage
     echo -e "
-Easy qcow & LVM snapshot management wtih with intelligent BASH tab-completion
+Easy qcow & LVM snapshot management with intelligent tab-completion
 
 ${BOLD}With no arguments:${RESET}
  ┐
@@ -144,29 +144,35 @@ ${BOLD}With no arguments:${RESET}
  └──────────────────────────────────────────────────────────────────────────────
 
 ${BOLD}Snapshotting with ${pzero}:${RESET}
-     ${r}FIXME: HELP PAGE NOT UPDATED FOR LVM YET${RESET}
  ┐
- │${BOLD}${pzero} DOMAIN {new|n} [--off] [--size LVSIZE]${RESET}               (NO confirmation)
- │    runs:
- │          virsh shutdown DOMAIN                             (and waits)
- │          virsh snapshot-create DOMAIN
- │          virsh start DOMAIN                                (except w/ --off)
+ │${BOLD}${pzero} DOMAIN {new|n} [SNAP] [--off] [--size LVSIZE]${RESET}        (NO confirmation)
+ │  • If provided, SNAP will be the name of the new snapshot
+ │     • Otherwise, name will be auto-generated
+ │  • Wait for DOMAIN to shut down
+ │  • Determine storage type
+ │  • If QCOW2 storage:
+ │      • Create new embedded snapshot w/ virsh snapshot-create-as
+ │        (Doing this more than once always leads to nested snapshots)
+ │  • If LVM storage:
+ │      • Check if current storage LV is thin-provisioned
+ │          • If so, create a new thin LV snapshot from it (no size needed)
+ │          • If not, size will be LVSIZE (default 2GiB) and
+ │              • Check if current storage LV is a snapshot
+ │                  • If so, create a new snapshot of its origin
+ │                  • If not, create a new snapshot of it
+ │      • Redfine DOMAIN xml to use the newly-created snapshot
+ │      • Add new snapshot to cfgfile in /etc/${pzero}/
+ │  • If not --off:
+ │      • Starts DOMAIN with new snapshot
  │
  │${BOLD}${pzero} DOMAIN {revert|r} [--off]${RESET}                            (NO confirmation)
- │    runs:
- │          virsh destroy DOMAIN
- │          virsh snapshot-revert DOMAIN --current
- │          virsh start DOMAIN                                (except w/ --off)
+ │    
  │
  │${BOLD}${pzero} DOMAIN {revert|r} SNAPSHOT_NAME [--off]${RESET}              (NO confirmation)
- │    runs:
- │          virsh destroy DOMAIN
- │          virsh snapshot-revert DOMAIN SNAPSHOT_NAME
- │          virsh start DOMAIN                                (except w/ --off)
+ │    
  │
  │${BOLD}${pzero} DOMAIN {Delete|D} SNAPSHOT_NAME${RESET}                      (YES confirmation)
- │    runs:
- │          virsh snapshot-delete DOMAIN SNAPSHOT_NAME
+ │    
  │
  │For more on managing snapshots:
  │    Virtualization Deployment & Administration Guide @ http://red.ht/1kwfbJs 
@@ -228,17 +234,6 @@ domain_cfgfile_eval() {
     fi >&2
     # Set global variable containing current storage's LVM VG name
     lvmVolgroup=$(get_lv_attribute VG of LV=${primaryStorage##*/})
-    # Probably not going to use:
-    #~ return
-    #~ unset       lvName vgName originVol thinPool creationDate creationTime
-    #~ declare -ag lvName vgName originVol thinPool creationDate creationTime
-    #~ eval $(
-        #~ awk -F❚ '
-        #~ { if (NF == 0 || $1 ~ /^\s*($|#)/) next
-          #~ else printf "lvName[%d]=\"%s\" vgName[%d]=\"%s\" origin[%d]=\"%s\" thinPool[%d]=\"%s\" creationDate[%d]=\"%s\" creationTime[%d]=\"%s\" ",
-                    #~ $1,$2, $1,$3, $1,$4, $1,$5, $1,$6, $1,$7
-        #~ }' ${cfgFile}
-    #~ )
 }
 
 domain_cfgfile_add_lvm_snap() {
@@ -326,6 +321,14 @@ get_lv_attribute() {
         }
         END{ exit E }
     ' ${cfgFile}
+}
+
+update_lv_attrs_datetime() {
+    # $1 = lv.id
+    local id=${1}
+    sed -i -r \
+        -e "/^${id}❚/s,(.*❚.*❚.*❚.*❚.*)❚.*❚,\1❚$(date +%F)❚," \
+        -e "/^${id}❚/s,(.*❚.*❚.*❚.*❚.*❚.*)❚.*,\1❚$(date "+%T %z")," ${cfgFile}
 }
 
 lvm_print_children_of_parent() {
@@ -514,11 +517,11 @@ list_snaps() {
 }
 
 get_next_available_lvm_snapshot_name() {
-    local n=0
-    while [[ -e ${primaryStorage}-snap${n} ]]; do
+    local n=0 origin=${1}
+    while [[ -e ${origin}-snap${n} ]]; do
         ((n++))
     done
-    echo ${primaryStorage##*/}-snap${n}
+    echo ${origin##*/}-snap${n}
 }
 
 get_next_available_lvm_snapshot_id() {
@@ -571,26 +574,25 @@ exec_must_succeed() {
 }
 
 create_new_lvm_snapshot() {
-    local snapshotSize snapshotName=${1} saveConfig=${2}
-    if get_lv_attribute ThinPool of LV=${primaryStorage##*/} >/dev/null; then
-        Print "${Domain}: Creating new thin LVM snapshot from thin origin ${primaryStorage#/dev/}"
+    local origin=${1} snapshotName=${2} snapshotSize
+    if get_lv_attribute ThinPool of LV=${origin##*/} >/dev/null; then
+        Print "${Domain}: Creating new thin LVM snapshot from thin origin ${origin#/dev/}"
         exec_must_succeed "Error: Problem creating snapshot ${lvmVolgroup}/${snapshotName}" \
-                          lvcreate --setactivationskip n --snapshot --name ${snapshotName} ${primaryStorage}
+                          lvcreate --setactivationskip n --snapshot --name ${snapshotName} ${origin}
     else
         if [[ -n ${snapshotDesiredSize} ]]; then
             snapshotSize=${snapshotDesiredSize}
         else
             snapshotSize=${nonthinSnapshotLvDefaultSize}
         fi
-        Print "${Domain}: Creating new ${snapshotSize} lvm snapshot from origin ${primaryStorage#/dev/}"
+        Print "${Domain}: Creating new ${snapshotSize} lvm snapshot from origin ${origin#/dev/}"
         exec_must_succeed "Error: Problem creating snapshot ${lvmVolgroup}/${snapshotName}" \
-                          lvcreate --snapshot --name ${snapshotName} --size ${snapshotSize} ${primaryStorage}
-        [[ -n ${saveConfig} ]] && echo "isThinLv[$snapshotName]='no'" >>${cfgFile}
+                          lvcreate --snapshot --name ${snapshotName} --size ${snapshotSize} ${origin}
     fi
 }
 
 new_snap() {
-    local snapshotDesiredName=${1} snapshotName
+    local snapshotDesiredName=${1} snapshotName origin=
     if [[ ${storageType} =~ raw|unknown ]]; then
         Print "Error: ${pzero} does not yet manage ${Domain}'s storage type (${storageType})"
         exit 64
@@ -599,14 +601,19 @@ new_snap() {
     wait_for_shutdown ${Domain}
     case ${storageType} in
         lvm)
+            if ! get_lv_attribute ThinPool of LV=${primaryStorage##*/} >/dev/null && origin=$(get_lv_attribute Origin of LV=${primaryStorage##*/}); then
+                origin=/dev/${lvmVolgroup}/${origin}
+            else
+                origin=${primaryStorage}
+            fi
             if [[ -n ${snapshotDesiredName} ]]; then
                 snapshotName=${snapshotDesiredName}
             else
-                snapshotName=$(get_next_available_lvm_snapshot_name)
+                snapshotName=$(get_next_available_lvm_snapshot_name ${origin})
             fi
-            create_new_lvm_snapshot ${snapshotName}
+            create_new_lvm_snapshot ${origin} ${snapshotName}
             ID=$(get_next_available_lvm_snapshot_id) LV=${snapshotName} VG=${lvmVolgroup} \
-                Origin=${primaryStorage##*/} ThinPool=$(get_lv_attribute ThinPool of LV=${primaryStorage##*/}) \
+                Origin=${origin##*/} ThinPool=$(get_lv_attribute ThinPool of LV=${origin##*/}) \
                 Date=$(date +%F) Time=$(date "+%T %z") \
                 domain_cfgfile_add_lvm_snap
             Print "${Domain}: Configuring domain to use new snapshot ${lvmVolgroup}/${snapshotName} as primary storage"
@@ -631,7 +638,14 @@ revert_snap() {
         if [[ -z ${snapshotName} ]]; then
             Print "${Domain}: Must be off to recreate current snapshot logvol"
             wait_for_destroy ${Domain}
-            create_new_lvm_snapshot ${primaryStorage##*/}
+            if ! get_lv_attribute ThinPool of LV=${primaryStorage##*/} >/dev/null && origin=$(get_lv_attribute Origin of LV=${primaryStorage##*/}); then
+                origin=/dev/${lvmVolgroup}/${origin}
+            else
+                origin=${primaryStorage}
+            fi
+            lvremove -f ${primaryStorage}
+            create_new_lvm_snapshot ${origin} ${primaryStorage##*/}
+            update_lv_attrs_datetime $(get_lv_attribute ID of LV=${primaryStorage##*/})
         else
             if [[ $(virsh domid ${Domain}) != - ]]; then
                 Print "${Domain}: Must be off to change which logvol is in use"
