@@ -1,5 +1,5 @@
 #!/bin/bash
-# valine v0.5.4 last mod 2014/08/26
+# valine v0.5.5 last mod 2014/08/26
 # Latest version at <https://github.com/ryran/b19scripts>
 # Copyright 2014 Ryan Sawhill <rsaw@redhat.com>
 #
@@ -663,10 +663,11 @@ revert_snap() {
         if [[ -z ${snapshotName} ]]; then
             Print "${Domain}: Must be off to recreate current snapshot logvol"
             wait_for_destroy ${Domain}
-            if ! get_lv_attribute ThinPool of LV=${primaryStorage##*/} >/dev/null && origin=$(get_lv_attribute Origin of LV=${primaryStorage##*/}); then
+            if origin=$(get_lv_attribute Origin of LV=${primaryStorage##*/}); then
                 origin=/dev/${lvmVolgroup}/${origin}
             else
-                origin=${primaryStorage}
+                Print "Error: Domain's primary storage (${primaryStorage#/dev/}) is not a snapshot"
+                exit
             fi
             lvremove -f ${primaryStorage}
             create_new_lvm_snapshot ${origin} ${primaryStorage##*/}
@@ -676,9 +677,9 @@ revert_snap() {
                 Print "${Domain}: Must be off to change which logvol is in use"
                 echo "  Do you want to shutdown gracefully or force destroy?" 
                 echo "  (Choose shutdown if you plan to use the current storage again)"
-                read -ep "  [s]hutdown or [d]estroy? > "
+                read -ep "  s[h]utdown or [d]estroy? > "
                 case "${REPLY}" in
-                    s|S|shutdown)
+                    h|H|shutdown)
                         wait_for_shutdown ${Domain}
                         ;;
                     d|D|destroy)
