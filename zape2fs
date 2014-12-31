@@ -1,7 +1,7 @@
 #!/bin/bash
-# zape2fs v0.1.3 last mod 2013/10/22
+# zape2fs v0.1.5 last mod 2014/12/30
 # Latest version at <http://github.com/ryran/b19scripts>
-# Copyright 2013 Ryan Sawhill Aroha <rsaw@redhat.com>
+# Copyright 2013, 2014 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -49,6 +49,7 @@ See <github.com/ryran/b19scripts> to report bugs or suggestions"
 }
 
 autodetect_all_ext_devs() {
+  local n
   for n in 2 3 4; do
     blkid -t TYPE=ext$n -o device
   done
@@ -136,13 +137,10 @@ parse_positional_params() {
   unset doAutodetect bypassWarning doSuperblockTest
   until [[ $1 == -- ]]; do
     case $1 in
-      -a|--all)     doAutodetect=y
-    ;;
-      -h|--help)    show_help
-    ;;
-      -Y|--bypass)  bypassWarning=y
-    ;;
-      -t|--test)    doSuperblockTest=y
+      -a|--all)     doAutodetect=y ;;
+      -h|--help)    show_help ;;
+      -Y|--bypass)  bypassWarning=y ;;
+      -t|--test)    doSuperblockTest=y ;;
     esac
     shift
   done
@@ -219,7 +217,7 @@ done
 # From testing, this is often unnecessary, but better to avoid the fringe cases
 for cmd in $crucialCommands; do
   if [[ $saveCommands == yes ]]; then  
-    cp -a $(type -P $cmd) $TMPDIR 2>/dev/null
+    cp -pL $(type -P $cmd) $TMPDIR 2>/dev/null
     eval $cmd=$TMPDIR/$cmd
   else
     eval $cmd=$cmd
