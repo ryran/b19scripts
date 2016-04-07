@@ -58,7 +58,7 @@ def parse_args():
         prog=prog,
         description="A simplistic logger clone",
         add_help=True,
-        epilog="Questions/issues to rsaw@redhat.com",
+        epilog="Questions/issues to: https://github.com/ryran/b19scripts/issues",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument('--id', action='store_true', help="log the process ID too")
     p.add_argument('--priority', default='user.info', help="mark given message with this priority")
