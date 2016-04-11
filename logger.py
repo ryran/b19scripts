@@ -19,12 +19,38 @@
 # Modules from standard library
 from __future__ import print_function
 import argparse, logging, logging.handlers
+from socket import SOCK_DGRAM, SOCK_STREAM
 from sys import exit, stdin, stderr
 from os import getuid
 from pwd import getpwuid
 
+# Set some globals
+prog = 'logger.py'
+versionNumber = '0.2.0'
+versionDate = '2016/04/11'
+description = "A simplistic python logger clone that reads input via stdin"
+epilog = "{} v{} last mod {};".format(prog, versionNumber, versionDate)
+epilog += "\nFor issues & questions, see: https://github.com/ryran/b19scripts/issues"
 user = getpwuid(getuid()).pw_name
 
+# Add missing syslog levels to python logger
+logging.addLevelName(25, 'NOTICE')
+logging.addLevelName(60, 'ALERT')
+logging.addLevelName(70, 'EMERG')
+
+# Customize logging.handlers.SysLogHandler.priority_map to include added levels
+loggerSyslogHandlerPriorityMap = {
+    'DEBUG': 'debug',
+    'INFO': 'info',
+    'NOTICE': 'notice',
+    'WARNING': 'warning',
+    'ERROR': 'error',
+    'CRITICAL': 'critical',
+    'ALERT': 'alert',
+    'EMERG': 'emerg',
+    }
+
+# Build a dict to establish what integer to pass to Logger.log()
 syslogPriorityToLoggerLevel = {
     'debug': 10,
     'info': 20,
@@ -40,51 +66,64 @@ syslogPriorityToLoggerLevel = {
     'panic': 70,
     }
 
-loggerSyslogHandlerPriorityMap = {
-    'DEBUG': 'debug',
-    'INFO': 'info',
-    'NOTICE': 'notice',
-    'WARNING': 'warning',
-    'ERROR': 'error',
-    'CRITICAL': 'critical',
-    'ALERT': 'alert',
-    'EMERG': 'emerg',
-    }
+class CustomFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """This custom formatter eliminates the duplicate metavar in help lines."""
+    def _format_action_invocation(self, action):
+        if not action.option_strings:
+            metavar, = self._metavar_formatter(action, action.dest)(1)
+            return metavar
+        else:
+            parts = []
+            if action.nargs == 0:
+                parts.extend(action.option_strings)
+            else:
+                default = action.dest.upper()
+                args_string = self._format_args(action, default)
+                for option_string in action.option_strings:
+                    parts.append('%s' % option_string)
+                parts[-1] += ' %s'%args_string
+            return ', '.join(parts)
 
-def parse_args():
-    prog = 'logger.py'
+def parse_cmdline():
     fmt = lambda prog: CustomFormatter(prog)
     p = argparse.ArgumentParser(
         prog=prog,
-        description="A simplistic logger clone",
+        description=description,
         add_help=True,
-        epilog="Questions/issues to: https://github.com/ryran/b19scripts/issues",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    p.add_argument('--id', action='store_true', help="log the process ID too")
-    p.add_argument('--priority', default='user.info', help="mark given message with this priority")
-    # p.add_argument('--stderr', action='store_true', help="output message to standard error as well")
-    p.add_argument('--tag', default=user, help="mark every line with this tag")
-    p.add_argument('--socket', default='/dev/log', help="write to this Unix socket")
-    return p.parse_args()
-
-def main():
-    opts = parse_args()
+        epilog=epilog,
+        formatter_class=fmt)
+    p.add_argument('-p', '--priority', metavar='PRIO', dest='priostring', default='user.info', help="specify priority for given message")
+    p.add_argument('-t', '--tag', default=user, help="add tag to given message")
+    p.add_argument('-i', '--id', action='store_true', help="add process ID to tag")
+    g1 = p.add_mutually_exclusive_group()
+    g1.add_argument('-u', '--socket', default='/dev/log', help="write to local UNIX socket")
+    g1.add_argument('-d', '--udp', action='store_true', help="log via UDP instead of UNIX socket")
+    g1.add_argument('-T', '--tcp', action='store_true', help="log via TCP instead of UNIX socket")
+    p.add_argument('-n', '--server', default='localhost', help="DNS/IP of syslog server to use with --udp or --tcp")
+    p.add_argument('-P', '--port', type=int, default=514, help="port to use with --udp or --tcp")
+    opts =  p.parse_args()
     try:
-        facility = opts.priority.split('.')[0]
-        logging.handlers.SysLogHandler.facility_names[facility]
-        priority = opts.priority.split('.')[1]
-        logging.handlers.SysLogHandler.priority_names[priority]
-        level = syslogPriorityToLoggerLevel[priority]
+        opts.facility = opts.priostring.split('.')[0]
+        logging.handlers.SysLogHandler.facility_names[opts.facility]
+        opts.priority = opts.priostring.split('.')[1]
+        logging.handlers.SysLogHandler.priority_names[opts.priority]
+        opts.level = syslogPriorityToLoggerLevel[opts.priority]
     except:
         print("Improper 'priority' specified")
         print("Must be <facility>.<priority> as described in logger(1) man page\n")
         raise
-    logging.addLevelName(25, 'NOTICE')
-    logging.addLevelName(60, 'ALERT')
-    logging.addLevelName(70, 'EMERG')
+    return opts
+
+def main():
+    opts = parse_cmdline()
     myLogger = logging.getLogger(opts.tag)
     myLogger.setLevel(logging.DEBUG)
-    myHandler = logging.handlers.SysLogHandler(address=opts.socket, facility=facility)
+    if opts.udp:
+        myHandler = logging.handlers.SysLogHandler(address=(opts.server, opts.port), facility=opts.facility, socktype=SOCK_DGRAM)
+    elif opts.tcp:
+        myHandler = logging.handlers.SysLogHandler(address=(opts.server, opts.port), facility=opts.facility, socktype=SOCK_STREAM)
+    else:
+        myHandler = logging.handlers.SysLogHandler(address=opts.socket, facility=opts.facility)
     myHandler.priority_map = loggerSyslogHandlerPriorityMap
     if opts.id:
         myFormatter = logging.Formatter('%(name)s[%(process)s]: %(message)s')
@@ -96,9 +135,7 @@ def main():
         line = stdin.readline()
         if not line:
             break
-        # if opts.stderr:
-        #     print(line, file=stderr)
-        myLogger.log(level, line)
+        myLogger.log(opts.level, line)
 
 if __name__ == '__main__':
     try:
