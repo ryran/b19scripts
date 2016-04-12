@@ -16,7 +16,7 @@
 # limitations under the License.
 
 use strict;
-use warnings;
+# use warnings;
 use Getopt::Long qw( GetOptions );
 use Sys::Syslog qw( :DEFAULT setlogsock );
 
@@ -65,7 +65,7 @@ sub get_help {
           -P, --port PORT      port to use with --udp or --tcp (default: $port)
           -s, --stderr         output to standard error as well (default: False)
         
-        logger.pl v0.1.0 last mod 2016/04/11
+        logger.pl v0.1.1 last mod 2016/04/12
         For issues & questions, see: https://github.com/ryran/b19scripts/issues
     EOF
     return $help;
