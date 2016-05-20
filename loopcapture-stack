@@ -1,0 +1,145 @@
+#!/bin/bash
+# loopcapture-stack v0.1 last mod 2016/05/20
+# Latest version at <http://github.com/ryran/b19scripts>
+# Copyright 2016 Ryan Sawhill Aroha <rsaw@redhat.com>
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+#    General Public License <gnu.org/licenses/gpl.html> for more details.
+#-------------------------------------------------------------------------------
+
+pzero=loopcapture-stack
+version=$(sed '2q;d' ${0})
+
+# Set defaults, allowing environment to override
+: ${cmdList:="httpd,httpd.worker"}
+: ${loopCount:="20"}
+: ${sleepInt:="20s"}
+: ${outputDir:="."}
+
+show_help() {
+    cat <<EOF
+Usage: ${pzero} [--cmd CMDLIST] [OPTIONS]
+Use gstack/pstack to capture thread-dumps of any PIDs matching CMDLIST
+
+OPTIONS:
+
+  --cmd CMDLIST   Specify CMDLIST to match (uses 'ps -C' so commas are allowed)
+                  Default: 'httpd,httpd.worker'
+
+  --count LOOPCOUNT   Number of times to capture stack for every matched PID
+                      Default: '20'
+
+  --int SLEEPINTERVAL   How long to sleep between loops
+                        Default: '20s'
+
+  --graburl URL   Download URL w/curl (to file) at the beginning of each loop
+                  E.g., use with http server-status pages
+
+  --outputdir DIR   Specify output directory to save stack and graburl files
+                    Default: '.' (Current directory)
+                    If file called 'pstack.cap' exists, it will be overwritten
+
+LICENSE / DISCLAIMER:
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This program is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+  General Public License <gnu.org/licenses/gpl.html> for more details.
+
+Version info: ${version:2}
+See <github.com/ryran/b19scripts> to report bugs or suggestions
+EOF
+    exit
+}
+
+parse_positional_params() {
+    until [[ ${1} == -- ]]; do
+        case "${1}" in
+            -h|--help) show_help;;
+            --cmd)        cmdList=${2}; shift;;
+            --count)      loopCount=${2}; shift;;
+            --int)        sleepInt=${2}; shift;;
+            --graburl)    grabUrl=${2}; shift;;
+            --outputdir)  outputDir=${2}; shift;;
+        esac
+        shift
+    done
+    shift
+}
+
+# Set getopt options
+shortOpts="h"
+longOpts="help,cmd:,count:,int:,graburl:,outputdir:"
+
+# Check for bad args
+getopt -Q --name=${pzero} -o ${shortOpts} -l ${longOpts} -- "${@}" || show_help
+
+# Parse args proper-like and set variables appropriately
+parse_positional_params $(getopt -u --name=${pzero} -o ${shortOpts} -l ${longOpts} -- "${@}")
+
+# Check for critical errors
+if ! command -v pstack >/dev/null && ! command -v gstack >/dev/null; then
+    echo "ERR: Missing pstack/gstack command"
+    echo "Install gdb"
+    exit 1
+elif ! ps -C "${cmdList}" >/dev/null; then
+    echo "ERR: Invalid CMDLIST as specified by '--cmd CMDLIST'; no matches"
+    echo "See '-C' option in ps(1) man page"
+    exit 1
+elif ! grep -qs '^[0-9]\+$' <<<"${loopCount}"; then
+    echo "ERR: Invalid LOOPCOUNT as specified by '--count LOOPCOUNT'"
+    echo "Must be a number"
+    exit 1
+elif ! egrep -qs '^(\.[0-9]+|[0-9]+\.?[0-9]*)[smhd]?$' <<<"${sleepInt}"; then
+    echo "ERR: Invalid SLEEPINTERVAL as specified by '--int SLEEPINTERVAL'"
+    echo "See sleep(1) man page"
+    exit 1
+elif [[ -n ${grabUrl} ]] && ! curl -Lkso /dev/null "${grabUrl}"; then
+    echo "ERR: Invalid or non-responsive URL as specified by '--graburl URL'"
+    echo "This command failed: 'curl -Lkso /dev/null \"${grabUrl}\""
+    exit 1
+elif [[ ! -d ${outputDir} || ! -w ${outputDir} || ! -x ${outputDir} ]]; then
+    echo "ERR: Invalid/non-writable DIR as specified by '--outputdir DIR'"
+    exit 1
+fi >&2
+
+# GET TO WORK
+echo "${pzero}: Saving output to '${outputDir}'"
+
+for y in $(seq 1 ${loopCount}); do
+
+    echo -n "Begin loop ${y} of ${loopCount} ... " >&2
+    
+    [[ -n ${grabUrl} ]] && curl -Lkso "${outputDir}/graburl-$(printf '%02d' ${y})" "${grabUrl}"
+    
+    echo -e "\nDate: $(date)"
+    
+    for pid in $(ps -C "${cmdList}" --noheader -o pid); do
+        echo "    PID: ${pid}"
+        pstack ${pid} 2>&1
+    done
+    
+    echo Done. >&2
+    
+    if [[ ${y} -lt ${loopCount} ]]; then
+        echo "  Sleeping ${sleepInt}" >&2
+        sleep ${sleepInt}
+    fi
+
+done >> "${outputDir}/pstack.cap"
+
+echo -n "FINISHED. Find '${outputDir}/pstack.cap' "
+[[ -n ${grabUrl} ]] && echo -n "and '${outputDir}/graburl-*'"
+echo
