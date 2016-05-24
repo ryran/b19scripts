@@ -1,5 +1,5 @@
 #!/bin/bash
-# loopcapture-stack v0.1 last mod 2016/05/20
+# loopcapture-stack v0.2 last mod 2016/05/24
 # Latest version at <http://github.com/ryran/b19scripts>
 # Copyright 2016 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
@@ -21,30 +21,33 @@ version=$(sed '2q;d' ${0})
 : ${cmdList:="httpd,httpd.worker"}
 : ${loopCount:="20"}
 : ${sleepInt:="20s"}
-: ${outputDir:="."}
 
 show_help() {
     cat <<EOF
-Usage: ${pzero} [--cmd CMDLIST] [OPTIONS]
+Usage: ${pzero} [-c CMDLIST] [OPTIONS]
+
 Use gstack/pstack to capture thread-dumps of any PIDs matching CMDLIST
+By default, there will be 20 iterations 20 seconds apart
+Note that ps and top output will also be captured
 
 OPTIONS:
 
-  --cmd CMDLIST   Specify CMDLIST to match (uses 'ps -C' so commas are allowed)
-                  Default: 'httpd,httpd.worker'
+  -c, --cmd CMDLIST   Specify CMDLIST on which to match using 'ps -C'
+                      (so commas are allowed)
+                      Default: 'httpd,httpd.worker'
 
-  --count LOOPCOUNT   Number of times to capture stack for every matched PID
-                      Default: '20'
+  -n, --count LOOPCOUNT   Number of times to capture stack
+                          Default: '20'
 
-  --int SLEEPINTERVAL   How long to sleep between loops
-                        Default: '20s'
+  -i, --int SLEEPINTERVAL   How long to sleep between capture loops
+                            Default: '20s'
 
-  --graburl URL   Download URL w/curl (to file) at the beginning of each loop
-                  E.g., use with http server-status pages
+  -g, --graburl URL   Download URL w/curl (to file) at beginning of each loop
+                      E.g., use with http server-status pages
 
-  --outputdir DIR   Specify output directory to save stack and graburl files
-                    Default: '.' (Current directory)
-                    If file called 'pstack.cap' exists, it will be overwritten
+  -o, --outputdir DIR   Specify output directory to save files -- note that
+                        multiple filenames starting with 'pstack-' will created
+                        Default: '\$(mktemp -td pstack.XXX)' (some tempdir)
 
 LICENSE / DISCLAIMER:
 
@@ -59,7 +62,7 @@ LICENSE / DISCLAIMER:
   General Public License <gnu.org/licenses/gpl.html> for more details.
 
 Version info: ${version:2}
-See <github.com/ryran/b19scripts> to report bugs or suggestions
+For issues & questions, see: https://github.com/ryran/b19scripts/issues
 EOF
     exit
 }
@@ -67,12 +70,12 @@ EOF
 parse_positional_params() {
     until [[ ${1} == -- ]]; do
         case "${1}" in
-            -h|--help) show_help;;
-            --cmd)        cmdList=${2}; shift;;
-            --count)      loopCount=${2}; shift;;
-            --int)        sleepInt=${2}; shift;;
-            --graburl)    grabUrl=${2}; shift;;
-            --outputdir)  outputDir=${2}; shift;;
+            -h|--help)       show_help;;
+            -c|--cmd)        cmdList=${2}; shift;;
+            -n|--count)      loopCount=${2}; shift;;
+            -i|--int)        sleepInt=${2}; shift;;
+            -g|--graburl)    grabUrl=${2}; shift;;
+            -o|--outputdir)  outputDir=${2}; shift;;
         esac
         shift
     done
@@ -80,7 +83,7 @@ parse_positional_params() {
 }
 
 # Set getopt options
-shortOpts="h"
+shortOpts="hc:n:i:g:o:"
 longOpts="help,cmd:,count:,int:,graburl:,outputdir:"
 
 # Check for bad args
@@ -88,6 +91,9 @@ getopt -Q --name=${pzero} -o ${shortOpts} -l ${longOpts} -- "${@}" || show_help
 
 # Parse args proper-like and set variables appropriately
 parse_positional_params $(getopt -u --name=${pzero} -o ${shortOpts} -l ${longOpts} -- "${@}")
+
+# Create tempdir if needed
+[[ -n ${outputDir} ]] || outputDir=$(mktemp -td pstack.XXX)
 
 # Check for critical errors
 if ! command -v pstack >/dev/null && ! command -v gstack >/dev/null; then
@@ -119,27 +125,38 @@ fi >&2
 echo "${pzero}: Saving output to '${outputDir}'"
 
 for y in $(seq 1 ${loopCount}); do
-
-    echo -n "Begin loop ${y} of ${loopCount} ... " >&2
     
-    [[ -n ${grabUrl} ]] && curl -Lkso "${outputDir}/graburl-$(printf '%02d' ${y})" "${grabUrl}"
+    echo "Begin loop ${y} of ${loopCount}"
+    prefix="${outputDir}/pstack-$(printf '%02d' ${y})-"
     
-    echo -e "\nDate: $(date)"
+    [[ -n ${grabUrl} ]] && curl -Lkso "${prefix}graburl" "${grabUrl}" &
+    ps aux >"${prefix}psaux" &
+    ps auxm >"${prefix}psauxm" &
+    top -bn1 >"${prefix}top" &
     
-    for pid in $(ps -C "${cmdList}" --noheader -o pid); do
-        echo "    PID: ${pid}"
-        pstack ${pid} 2>&1
-    done
+    pids=$(ps -C "${cmdList}" --noheader -o pid)
+    if [[ -z ${pids} ]]; then
+        echo "ps CMDLIST ('${cmdList}') didn't match any processes during this loop" >&2
+    else
+        for pid in ${pids}; do
+            {
+            echo "Date: $(date)"
+            echo "    PID: ${pid}"
+            pstack ${pid}
+            } &> "${prefix}pid${pid}.pstack" &
+        done
+    fi
     
-    echo Done. >&2
+    echo -n "Waiting for background tasks to finish ... "
+    wait
+    echo "Done."
     
     if [[ ${y} -lt ${loopCount} ]]; then
         echo "  Sleeping ${sleepInt}" >&2
         sleep ${sleepInt}
     fi
 
-done >> "${outputDir}/pstack.cap"
+done
 
-echo -n "FINISHED. Find '${outputDir}/pstack.cap' "
-[[ -n ${grabUrl} ]] && echo -n "and '${outputDir}/graburl-*'"
-echo
+echo "FINISHED."
+echo "Inspect files in '${outputDir}'"
