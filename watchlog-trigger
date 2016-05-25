@@ -19,16 +19,17 @@ from textwrap import dedent
 import argparse
 from subprocess import call, check_call, CalledProcessError
 from tempfile import NamedTemporaryFile
-from os import remove
+from os import remove, getpid
 from sys import exit
 
 opts = None
-prog = 'watchlog-triggerexec'
-versionNumber = '0.2'
-versionDate = '2016/05/24'
+prog = 'watchlog-trigger'
+versionNumber = '0.3'
+versionDate = '2016/05/25'
 description = dedent("""
-    Watch FILE until a line matching REGEX shows up, then execute COMMAND
-    Requires inotifywait command from the inotify-tools package (EPEL)
+    Block watching FILE until it is modified (potentially requiring a line matching
+    REGEX). Once watching unblocks, execute COMMAND (if specified) and exit. 
+    This requires the inotifywait command from the inotify-tools package (EPEL).
     """)
 epilog = dedent("""
     LICENSE / DISCLAIMER:
@@ -54,21 +55,25 @@ def parse_cmdline():
         add_help=True,
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('-f', '--file', dest='watchFile', metavar='FILE', required=True, help="Specify [log] file to watch with 'tail -F FILE' (This file *must exist* and must be readable!)")
-    p.add_argument('-r', '--regex', dest='watchRegex', metavar='REGEX', required=True, help="Specify line-based basic regular expression to watch for in FILE (Use quotes around REGEX; it will be passed to grep without validation so test it ahead of time)")
-    p.add_argument('-c', '--cmd', dest='execCmd', metavar='COMMAND', required=True, help="Specify command(s) to execute when a match is triggered (Use quotes around COMMAND; it will be passed to shell without validation so test it ahead of time and be careful)")
+    p.add_argument('-f', '--file', dest='watchFile', metavar='FILE', required=True, help="Specify [log] file to watch with 'tail -Fn0 FILE'. This file *must exist* and be readable when {0} starts.".format(prog))
+    p.add_argument('-r', '--regex', dest='watchRegex', metavar='REGEX', help="Specify line-based grep basic regular expression to watch for in FILE. {0} will block until a new line matching REGEX shows up in FILE. Protect REGEX from your shell with quotes; it will be passed to grep without validation so test it ahead of time. Omit this option to simply block until FILE is modified.".format(prog))
+    p.add_argument('-c', '--cmd', dest='execCmd', metavar='COMMAND', help="Specify command(s) to execute after the watching of FILE unblocks. Protect COMMAND from your shell with quotes; it will be passed to shell without validation so test it ahead of time and be careful. Omit this option to simply exit after watching of FILE unblocks.")
     return p.parse_args()
 
 def logger(message, pri="daemon.info", tag=prog):
-    loggerCmd = ['logger', '-s', '-p', pri, '-t', tag, message]
+    prefix = "file:'{0}'".format(opts.watchFile)
+    if opts.watchRegex is not None:
+        prefix += ", regex:'{0}'".format(opts.watchRegex)
+    prefix += " --"
+    loggerCmd = ['logger', '-s', '-p', pri, '-t', tag, prefix, message]
     call(loggerCmd)
 
-def bye():
+def bye(rc=0):
     try:
         remove(opts.triggerFile)
     except:
         pass
-    call(['pkill', '--pgroup', '0'])
+    exit(rc)
 
 def main():
     global opts
@@ -82,28 +87,38 @@ def main():
         exit(1)
     # Create tempfile
     opts.triggerFile = NamedTemporaryFile(dir='/dev/shm').name
-    # Execute tail|grep>>file in background subshell
-    tailCmd = "(tail -Fn0 {0} | grep --line-buffered '{1}' >>{2}) &".format(opts.watchFile, opts.watchRegex, opts.triggerFile)
+    # Figure out required command
+    if opts.watchRegex is None:
+        tailCmd = "(tail --pid {0} -Fn0 {1}  >>{2}) &".format(getpid(), opts.watchFile, opts.triggerFile)
+        unblockMessage = "FILE MODIFIED! Unblocking!"
+    else:
+        tailCmd = "(tail --pid {0} -Fn0 {1} | grep --line-buffered '{2}' >>{3}) &".format(getpid(), opts.watchFile, opts.watchRegex, opts.triggerFile)
+        unblockMessage = "MATCH FOUND! Unblocking!"
+    # Execute tail in background subshell
     call(tailCmd, shell=True)
     # Log start
-    logger("file:'{0}', regex:'{1}' -- Initiating watch".format(opts.watchFile, opts.watchRegex))
+    logger("Initiating watch")
     # Execute inotifywait, quiting if it fails for some reason
     try:
         check_call(['inotifywait', '-e', 'modify', opts.triggerFile])
     except CalledProcessError:
-        logger("file:'{0}', regex:'{1}' -- inotifywait command returned error! Aborting!".format(opts.watchFile, opts.watchRegex, opts.execCmd), "daemon.err")
-        bye()
+        logger("inotifywait command returned error! Aborting!", "daemon.err")
+        bye(1)
     # If we get here, we hope inotifywait has cleanly exited due to match found
-    logger("file:'{0}', regex:'{1}' -- MATCH FOUND! Executing cmd: {2}".format(opts.watchFile, opts.watchRegex, opts.execCmd), "daemon.warning")
-    # Execute our user-requested command(s)
-    call(opts.execCmd, shell=True)
+    # Log appropriate unblockMessage (set above)
+    logger(unblockMessage, "daemon.warning")
+    # Execute command if necessary
+    if opts.execCmd:
+        logger("Executing cmd: {0}".format(opts.execCmd), "daemon.warning")
+        # Execute our user-requested command(s)
+        call(opts.execCmd, shell=True)
     # Quit
-    logger("file:'{0}', regex:'{1}' -- Exiting".format(opts.watchFile, opts.watchRegex, opts.execCmd))
+    logger("Exiting", "daemon.warning")
     bye()
 
 if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        logger("file:'{0}', regex:'{1}' -- User cancelled watch".format(opts.watchFile, opts.watchRegex), "daemon.warning")
+        logger("User cancelled watch", "daemon.warning")
         bye()
