@@ -21,10 +21,11 @@ from subprocess import call, check_call, CalledProcessError
 from tempfile import NamedTemporaryFile
 from os import remove, getpid
 from sys import exit
+import atexit
 
 opts = None
 prog = 'watchlog-trigger'
-versionNumber = '0.3'
+versionNumber = '0.4'
 versionDate = '2016/05/25'
 description = dedent("""
     Block watching FILE until it is modified (potentially requiring a line matching
@@ -61,41 +62,44 @@ def parse_cmdline():
     return p.parse_args()
 
 def logger(message, pri="daemon.info", tag=prog):
-    prefix = "file:'{0}'".format(opts.watchFile)
+    message += " -- file('{0}')".format(opts.watchFile)
     if opts.watchRegex is not None:
-        prefix += ", regex:'{0}'".format(opts.watchRegex)
-    prefix += " --"
-    loggerCmd = ['logger', '-s', '-p', pri, '-t', tag, prefix, message]
+        message += ", regex('{0}')".format(opts.watchRegex)
+    loggerCmd = ['logger', '-s', '-p', pri, '-t', tag, message]
     call(loggerCmd)
 
-def bye(rc=0):
-    try:
-        remove(opts.triggerFile)
-    except:
-        pass
-    exit(rc)
-
-def main():
-    global opts
-    opts = parse_cmdline()
-    # Exit cleanly (early) if missing inotifywait
+def check_have_inotifywait():
     try:
         check_call('command -v inotifywait >/dev/null', shell=True)
     except:
         print("Missing the inotifywait command (from the inotify-tools package)".format(prog))
         print("In RHEL, this can be installed from EPEL (https://fedoraproject.org/wiki/EPEL)")
         exit(1)
-    # Create tempfile
-    opts.triggerFile = NamedTemporaryFile(dir='/dev/shm').name
-    # Figure out required command
+
+def exit_handler():
+    try:
+        remove(opts.triggerFile)
+    except:
+        pass
+    
+def main():
+    global opts
+    opts = parse_cmdline()
+    # Exit cleanly (early) if missing inotifywait
+    check_have_inotifywait()
     if opts.watchRegex is None:
-        tailCmd = "(tail --pid {0} -Fn0 {1}  >>{2}) &".format(getpid(), opts.watchFile, opts.triggerFile)
+        # If no regex, we can use inotify directly on watch file
+        opts.triggerFile = opts.watchFile
         unblockMessage = "FILE MODIFIED! Unblocking!"
     else:
-        tailCmd = "(tail --pid {0} -Fn0 {1} | grep --line-buffered '{2}' >>{3}) &".format(getpid(), opts.watchFile, opts.watchRegex, opts.triggerFile)
+        # If regex, we need to use tail|grep and inotify on output from that, so create tempfile
+        opts.triggerFile = NamedTemporaryFile(dir='/dev/shm').name
+        atexit.register(exit_handler)
+        # Execute tail in background subshell
+        cmd =  "(tail --pid {0} -Fn0 {1} |".format(getpid(), opts.watchFile)
+        cmd += " grep --line-buffered '{0}' >>{1}) &".format(opts.watchRegex, opts.triggerFile)
+        call(cmd, shell=True)
         unblockMessage = "MATCH FOUND! Unblocking!"
-    # Execute tail in background subshell
-    call(tailCmd, shell=True)
     # Log start
     logger("Initiating watch")
     # Execute inotifywait, quiting if it fails for some reason
@@ -103,22 +107,20 @@ def main():
         check_call(['inotifywait', '-e', 'modify', opts.triggerFile])
     except CalledProcessError:
         logger("inotifywait command returned error! Aborting!", "daemon.err")
-        bye(1)
+        exit(1)
     # If we get here, we hope inotifywait has cleanly exited due to match found
     # Log appropriate unblockMessage (set above)
     logger(unblockMessage, "daemon.warning")
     # Execute command if necessary
     if opts.execCmd:
-        logger("Executing cmd: {0}".format(opts.execCmd), "daemon.warning")
+        logger('Executing cmd: """{0}"""'.format(opts.execCmd), "daemon.warning")
         # Execute our user-requested command(s)
         call(opts.execCmd, shell=True)
     # Quit
     logger("Exiting", "daemon.warning")
-    bye()
 
 if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
         logger("User cancelled watch", "daemon.warning")
-        bye()
