@@ -1,0 +1,11 @@
+[Unit]
+Description=Activate RHV host(s) and start VM(s)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+TimeoutSec=0
+ExecStart=/usr/sbin/manage-rhvh daemon
+
+[Install]
+WantedBy=multi-user.target
