@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 TimeoutSec=0
+#Environment=RHVM="your.rhvm.fqdn"
+#Environment=RHVM_USER="admin@internal"
 ExecStart=/usr/sbin/manage-rhvh daemon
 
 [Install]
