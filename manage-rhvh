@@ -283,40 +283,40 @@ main() {
 			cat >&2 <<-EOF
 				Usage: ${0##*/} activate|deactivate|daemon
 				
-				  activate:
-				   1) From RHVM, activate all RHV hosts (or all hosts present in "MANAGE_HOSTS"
-				      environment variable).
-				      From a RHV host, activate only that host.
-				   2) Wait for all datacenters (or all datacenters in "MANAGE_DCS" environment
-				      variable) to become active.
-				   3) Start all VMs (or all VMs in "MANAGE_VMS" environment variable).
+				activate:
+				  1) From RHVM, activate all RHV hosts (or all hosts present in "MANAGE_HOSTS"
+				     environment variable).
+				     From a RHV host, activate only that host.
+				  2) Wait for all datacenters (or all datacenters in "MANAGE_DCS" environment
+				     variable) to become active.
+				  3) Start all VMs (or all VMs in "MANAGE_VMS" environment variable).
 				  
-				  deactivate:
-				   1) From RHVM, gracefully shutdown all VMs (or all VMs in "MANAGE_VMS"
-				      environment variable).
-					  From a RHV host, gracefully shutdown all VMs running on that host. (This
-					  obviously assumes environments where migration has not been configured.)
-				   2) From RHVM, put all RHV hosts (or all hosts present in "MANAGE_HOSTS"
-				      environment variable) into maintenance mode.
-					  From a RHV host, put only that host into maintenance mode.
-				  
-				  About environment variables:
-				   * Set "RHVM" to FQDN of the RHVM; default: "rhvm.\$(dnsdomainname)"
-				   * Set "RHVM_USER" as desired; default: "admin@internal"
-				   * Prior to execution, save password for RHVM_USER to ~/.rhvm.passwd
-				   * To keep activate/deactivate from operating on any VMs, set: MANAGE_VMS=" "
-				     The same applies to the MANAGE_HOSTS and MANAGE_DCS variables.
-				   
-				  daemon:
-				   1) Run "rguard -1" to disable all shutdown/reboot 
-				   2) Run "activate"
-				   3) Stay resident, waiting for systemd-logind to report "Power key pressed"
-				      journal event (as triggered by an ACPI shutdown).
-				   4) Run "deactivate"
-				   5) Run "rguard -0" to unblock shutdown/reboot
+				deactivate:
+				  1) From RHVM, gracefully shutdown all VMs (or all VMs in "MANAGE_VMS"
+				     environment variable).
+				     From a RHV host, gracefully shutdown all VMs running on that host. (This
+				     obviously assumes environments where migration has not been configured.)
+				  2) From RHVM, put all RHV hosts (or all hosts present in "MANAGE_HOSTS"
+				     environment variable) into maintenance mode.
+				     From a RHV host, put only that host into maintenance mode.
+				
+				daemon:
+				  1) Run "rguard -1" to configure systemd to disable shutdown/reboot.
+				  2) Run "activate" (above).
+				  3) Stay resident, waiting for systemd-logind to report "Power key pressed"
+				     journal event (as triggered by an ACPI shutdown).
+				  4) Run "deactivate" (above).
+				  5) Run "rguard -0" to unblock shutdown/reboot.
 				  
 				  The daemon mode requires reboot-guard (https://github.com/ryran/reboot-guard)
-				  to block and unblock shutdown, so make sure that is installed.
+				  to block and unblock shutdown, so ensure that is installed.
+				
+				SETUP / ENVIRONMENT VARIABLES:
+				  * Set "RHVM" variable to FQDN of the RHVM; default: "rhvm.\$(dnsdomainname)"
+				  * Set "RHVM_USER" as desired; default: "admin@internal"
+				  * Prior to execution, save password for RHVM_USER to: ~/.rhvm.passwd
+				  * To keep activate/deactivate from operating on any VMs, set: MANAGE_VMS=" "
+				    The same applies to the MANAGE_HOSTS and MANAGE_DCS variables.
 			EOF
 			exit 1
 	esac
