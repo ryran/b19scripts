@@ -5,8 +5,26 @@ Wants=network-online.target
 
 [Service]
 TimeoutSec=0
+
+# If your RHVM FQDN is not "rhvm.$(dnsdomainname)", set this:
 #Environment=RHVM=your.rhvm.fqdn
+
+# If your RHVM user is not "admin@internal", set this:
 #Environment=RHVM_USER=admin@internal
+
+# If you don't want to start/stop all hosts, specify hosts by name/uuid:
+#Environment="MANAGE_HOSTS=host1 host2 host3"
+
+# If you don't want to wait for all datacenters to start, specify dcs by name/uuid:
+#Environment="MANAGE_DCS=datacenter1 datacenter2 datacenter3"
+# To wait for zero datacenters, store a space:
+#Environment="MANAGE_DCS= "
+
+# If you don't want to start/stop all VMs, specify VMs by name/uuid:
+#Environment="MANAGE_VMS=vm1 vm2 vm3"
+# To start/stop zero VMs, store a space:
+#Environment="MANAGE_VMS= "
+
 ExecStart=/usr/sbin/manage-rhvh daemon
 
 [Install]
