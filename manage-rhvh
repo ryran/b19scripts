@@ -21,12 +21,27 @@ set -e
 # Default:
 : ${RHVM_USER:="admin@internal"}
 
+get_rhvm_user_password() {
+	# Allow password env var or read from file (and quit if missing)
+	[[ ${RHVM_USER_PASSWORD} ]] || RHVM_USER_PASSWORD=$(< ~/.rhvm.passwd) || print_help
+}
+
 # Validate optional integer variables used in loop_wait()
 [[ ${sleep} =~ ^[0-9]+$ ]] || unset sleep
 [[ ${maxcount} =~ ^[0-9]+$ ]] || unset maxcount
 
+# Clear a global
+unset hostListCache
+
 i_am_rhvm() {
-	[[ $(hostname) == ${RHVM} ]]
+	i_am_not_a_host || [[ $(hostname) == ${RHVM} ]]
+}
+
+i_am_not_a_host() {
+	if ! [[ ${hostListCache} ]]; then
+		hostListCache=$(get_list hosts) || exit 1
+	fi
+	! grep -qs "^$(hostname)$" <<<"${hostListCache}"
 }
 
 rewrite_ovirtshell_cfg() {
@@ -49,7 +64,7 @@ rewrite_ovirtshell_cfg() {
 		ca_file = $(echo ~/.rhvm.crt)
 		dont_validate_cert_chain = False
 		key_file = None
-		password = $(< ~/.rhvm.passwd)
+		password = ${RHVM_USER_PASSWORD}
 		cert_file = None
 	EOF
 }
@@ -108,7 +123,7 @@ shutdown_vm() {
 		echo "  ✔ VM already down"
 		return
 	fi
-	if ! ( i_am_rhvm || [[ ${MANAGE_VMS} ]] ); then
+	if ! i_am_rhvm && [[ -z ${MANAGE_VMS} ]]; then
 		hostid=$(ovirt-shell -E "show vm ${vmName}" | awk '$1=="host-id" {print $3}')
 		hostid_name=$(ovirt-shell -E "show host ${hostid}" | awk '$1=="name" {print $3}')
 		if [[ ${hostid_name} != $(hostname) ]]; then
@@ -188,12 +203,11 @@ get_vms() {
 }
 
 get_hosts() {
-	local out host hosts=
-	out=$(get_list hosts) || return 1
+	local host hosts=
 	i_am_rhvm || : ${MANAGE_HOSTS:="$(hostname)"}
 	if [[ ${MANAGE_HOSTS} ]]; then
 		for host in ${MANAGE_HOSTS}; do
-			if grep -qs "^${host}$" <<<"${out}"; then
+			if grep -qs "^${host}$" <<<"${hostListCache}"; then
 				hosts+="${host} "
 			else
 				echo "Unknown RHV host '${host}'" >&2
@@ -202,7 +216,7 @@ get_hosts() {
 		# Return failure if none of the specified hosts exist
 		[[ ${hosts} ]] && echo "${hosts}" || return 1
 	else
-		echo "${out}"
+		echo "${hostListCache}"
 	fi
 }
 
@@ -261,15 +275,62 @@ deactivate() {
 	exit
 }
 
+print_help() {
+	cat >&2 <<-EOF
+		Usage: ${0##*/} activate|deactivate|daemon
+		
+		activate:
+		  1) From a RHV host, activate only that host.
+		       [Or hosts listed space-separated in MANAGE_HOSTS environment variable]
+		     From RHVM or some other machine, activate all hosts.
+		       [Or hosts in MANAGE_HOSTS env var]
+		  2) Wait for all datacenters.
+		       [Or datacenters in MANAGE_DCS env var]
+		  3) Start all VMs.
+		       [Or VMs in MANAGE_VMS env var]
+		  
+		deactivate:
+		  1) From a RHV host, gracefully shutdown only VMs running on that host.
+		       [Or VMs in MANAGE_VMS]
+		     From RHVM or some other machine, gracefully shutdown all VMs.
+		       [Or VMs in MANAGE_VMS]
+		  2) From a RHV host, put only that host into maintenance mode.
+		       [Or hosts in MANAGE_HOSTS]
+		     From RHVM or some other machine, put all hosts into maintenance mode.
+		       [Or hosts in MANAGE_HOSTS]
+		
+		daemon:
+		  1) Run "rguard -1" cmd to configure systemd to disable shutdown/reboot.
+		  2) Run "activate" [described above].
+		  3) Stay resident, waiting for systemd-logind to report "Power key pressed"
+		     journal event [as triggered by an ACPI shutdown].
+		  4) Run "deactivate" [described above].
+		  5) Run "rguard -0" cmd to unblock shutdown/reboot.
+		  
+		  The daemon mode requires reboot-guard (https://github.com/ryran/reboot-guard)
+		  to block and unblock shutdown, so ensure that is installed.
+		
+		SETUP / ENVIRONMENT VARIABLES:
+		  * Set RHVM variable to FQDN of the RHVM; default: "rhvm.\$(dnsdomainname)"
+		  * Set RHVM_USER variable as desired; default: "admin@internal"
+		  * Set RHVM_USER_PASSWORD variable or save password to: ~/.rhvm.passwd
+		  * To keep activate/deactivate from operating on any VMs, set: MANAGE_VMS=" "
+		    The same applies to the MANAGE_HOSTS and MANAGE_DCS variables.
+	EOF
+	exit 1
+}
+
 main() {
 	case ${1} in
 		activate|deactivate)
+			get_rhvm_user_password
 			${1}
 			exit
 			;;
 		daemon)
+			get_rhvm_user_password
 			if ! journalctl -u systemd-logind -n1 >/dev/null; then
-				echo "Error querying journal (perms?); aborting activate"
+				echo "Error querying journal (perms?); aborting daemon activate"
 				exit 1
 			fi
 			trap 'echo Deactivating due to receipt of SIGINT/SIGTERM; deactivate daemon' INT TERM
@@ -280,48 +341,7 @@ main() {
 			deactivate daemon
 			;;
 		*)
-			cat >&2 <<-EOF
-				Usage: ${0##*/} activate|deactivate|daemon
-				
-				activate:
-				  1) From RHVM, activate all hosts.
-				       [Or hosts listed space-separated in MANAGE_HOSTS environment variable]
-				     From non-RHVM, activate only that host.
-				       [Or hosts in MANAGE_HOSTS env var]
-				  2) Wait for all datacenters.
-				       [Or datacenters in MANAGE_DCS env var]
-				  3) Start all VMs.
-				       [Or VMs in MANAGE_VMS env var]
-				  
-				deactivate:
-				  1) From RHVM, gracefully shutdown all VMs.
-				       [Or VMs in MANAGE_VMS]
-				     From non-RHVM, gracefully shutdown all VMs running on that host.
-				       [Or VMs in MANAGE_VMS]
-				  2) From RHVM, put all hosts into maintenance mode.
-				       [Or hosts in MANAGE_HOSTS]
-				     From non-RHVM, put only that host into maintenance mode.
-				       [Or hosts in MANAGE_HOSTS]
-				
-				daemon:
-				  1) Run "rguard -1" cmd to configure systemd to disable shutdown/reboot.
-				  2) Run "activate" [described above].
-				  3) Stay resident, waiting for systemd-logind to report "Power key pressed"
-				     journal event [as triggered by an ACPI shutdown].
-				  4) Run "deactivate" [described above].
-				  5) Run "rguard -0" cmd to unblock shutdown/reboot.
-				  
-				  The daemon mode requires reboot-guard (https://github.com/ryran/reboot-guard)
-				  to block and unblock shutdown, so ensure that is installed.
-				
-				SETUP / ENVIRONMENT VARIABLES:
-				  * Set RHVM variable to FQDN of the RHVM; default: "rhvm.\$(dnsdomainname)"
-				  * Set RHVM_USER as desired; default: "admin@internal"
-				  * Prior to execution, save password for RHVM_USER to: ~/.rhvm.passwd
-				  * To keep activate/deactivate from operating on any VMs, set: MANAGE_VMS=" "
-				    The same applies to the MANAGE_HOSTS and MANAGE_DCS variables.
-			EOF
-			exit 1
+			print_help
 	esac
 }
 

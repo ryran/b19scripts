@@ -12,15 +12,15 @@ TimeoutSec=0
 # If your RHVM user is not "admin@internal", set this:
 #Environment=RHVM_USER=admin@internal
 
-# If you don't want to start/stop all hosts, specify hosts by name/uuid:
+# If you don't want to start/stop all hosts, specify hosts by name:
 #Environment="MANAGE_HOSTS=host1 host2 host3"
 
-# If you don't want to wait for all datacenters to start, specify dcs by name/uuid:
+# If you don't want to wait for all datacenters to start, specify dcs by name:
 #Environment="MANAGE_DCS=datacenter1 datacenter2 datacenter3"
 # To wait for zero datacenters, store a space:
 #Environment="MANAGE_DCS= "
 
-# If you don't want to start/stop all VMs, specify VMs by name/uuid:
+# If you don't want to start/stop all VMs, specify VMs by name:
 #Environment="MANAGE_VMS=vm1 vm2 vm3"
 # To start/stop zero VMs, store a space:
 #Environment="MANAGE_VMS= "
