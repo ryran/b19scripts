@@ -108,7 +108,7 @@ shutdown_vm() {
 		echo "  ✔ VM already down"
 		return
 	fi
-	if ! i_am_rhvm; then
+	if ! ( i_am_rhvm || [[ ${MANAGE_VMS} ]] ); then
 		hostid=$(ovirt-shell -E "show vm ${vmName}" | awk '$1=="host-id" {print $3}')
 		hostid_name=$(ovirt-shell -E "show host ${hostid}" | awk '$1=="name" {print $3}')
 		if [[ ${hostid_name} != $(hostname) ]]; then
@@ -190,7 +190,7 @@ get_vms() {
 get_hosts() {
 	local out host hosts=
 	out=$(get_list hosts) || return 1
-	i_am_rhvm || MANAGE_HOSTS=$(hostname)
+	i_am_rhvm || : ${MANAGE_HOSTS:="$(hostname)"}
 	if [[ ${MANAGE_HOSTS} ]]; then
 		for host in ${MANAGE_HOSTS}; do
 			if grep -qs "^${host}$" <<<"${out}"; then
@@ -284,36 +284,39 @@ main() {
 				Usage: ${0##*/} activate|deactivate|daemon
 				
 				activate:
-				  1) From RHVM, activate all RHV hosts (or all hosts present in "MANAGE_HOSTS"
-				     environment variable).
-				     From a RHV host, activate only that host.
-				  2) Wait for all datacenters (or all datacenters in "MANAGE_DCS" environment
-				     variable) to become active.
-				  3) Start all VMs (or all VMs in "MANAGE_VMS" environment variable).
+				  1) From RHVM, activate all hosts.
+				       [Or hosts listed space-separated in MANAGE_HOSTS environment variable]
+				     From non-RHVM, activate only that host.
+				       [Or hosts in MANAGE_HOSTS env var]
+				  2) Wait for all datacenters.
+				       [Or datacenters in MANAGE_DCS env var]
+				  3) Start all VMs.
+				       [Or VMs in MANAGE_VMS env var]
 				  
 				deactivate:
-				  1) From RHVM, gracefully shutdown all VMs (or all VMs in "MANAGE_VMS"
-				     environment variable).
-				     From a RHV host, gracefully shutdown all VMs running on that host. (This
-				     obviously assumes environments where migration has not been configured.)
-				  2) From RHVM, put all RHV hosts (or all hosts present in "MANAGE_HOSTS"
-				     environment variable) into maintenance mode.
-				     From a RHV host, put only that host into maintenance mode.
+				  1) From RHVM, gracefully shutdown all VMs.
+				       [Or VMs in MANAGE_VMS]
+				     From non-RHVM, gracefully shutdown all VMs running on that host.
+				       [Or VMs in MANAGE_VMS]
+				  2) From RHVM, put all hosts into maintenance mode.
+				       [Or hosts in MANAGE_HOSTS]
+				     From non-RHVM, put only that host into maintenance mode.
+				       [Or hosts in MANAGE_HOSTS]
 				
 				daemon:
-				  1) Run "rguard -1" to configure systemd to disable shutdown/reboot.
-				  2) Run "activate" (above).
+				  1) Run "rguard -1" cmd to configure systemd to disable shutdown/reboot.
+				  2) Run "activate" [described above].
 				  3) Stay resident, waiting for systemd-logind to report "Power key pressed"
-				     journal event (as triggered by an ACPI shutdown).
-				  4) Run "deactivate" (above).
-				  5) Run "rguard -0" to unblock shutdown/reboot.
+				     journal event [as triggered by an ACPI shutdown].
+				  4) Run "deactivate" [described above].
+				  5) Run "rguard -0" cmd to unblock shutdown/reboot.
 				  
 				  The daemon mode requires reboot-guard (https://github.com/ryran/reboot-guard)
 				  to block and unblock shutdown, so ensure that is installed.
 				
 				SETUP / ENVIRONMENT VARIABLES:
-				  * Set "RHVM" variable to FQDN of the RHVM; default: "rhvm.\$(dnsdomainname)"
-				  * Set "RHVM_USER" as desired; default: "admin@internal"
+				  * Set RHVM variable to FQDN of the RHVM; default: "rhvm.\$(dnsdomainname)"
+				  * Set RHVM_USER as desired; default: "admin@internal"
 				  * Prior to execution, save password for RHVM_USER to: ~/.rhvm.passwd
 				  * To keep activate/deactivate from operating on any VMs, set: MANAGE_VMS=" "
 				    The same applies to the MANAGE_HOSTS and MANAGE_DCS variables.
