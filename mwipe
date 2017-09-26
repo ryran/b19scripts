@@ -1,7 +1,7 @@
 #!/bin/bash
-# mwipe v4.5.0 last mod 2014/07/28
+# mwipe v4.6.0 last mod 2017/09/25
 # Latest version at <http://github.com/ryran/b19scripts>
-# Copyright 2010, 2011, 2012, 2013, 2014 Ryan Sawhill Aroha <rsaw@redhat.com>
+# Copyright 2010, 2011, 2012, 2013, 2014, 2017 Ryan Sawhill Aroha <rsaw@redhat.com>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -25,7 +25,7 @@ zero=${0##*/}  # Appname
 version=$(sed '2q;d' $0)  # Version from line 2
 
 # getopt options
-shortOpts="ynbrstfRxd:P:S:"
+shortOpts="yYnbrstfRxd:P:S:"
 longOpts="bypass,dryrun,background,reboot,shutdown,chvt,full,random,extra,dev:,prefix:,suffix:"
 
 # Colors
@@ -89,7 +89,7 @@ Other options:"
 If run with no arguments, $zero will essentially look for any block devices
 it can find and then wipe out between 32 and 64 KiB from the beginning and [up
 to the] end of each detected partition (unless -x is used, in which case the
-range is bumped up by a factor if 64, i.e.: to between 2 and 4 MiB). After that,
+range is bumped up by a factor of 64, i.e.: to between 2 and 4 MiB). After that,
 the partition table in the MBR will be wiped as well, virtually eliminating any
 chance of easily recovering the data.
 
@@ -185,11 +185,11 @@ parse_positional_params() {
                           echo "$zero: conflicting argument -- '$1'" >&2; show_usage; exit 1
                         }
     ;;
-      -Y|--bypass)      bypass=y
+      -y|-Y|--bypass)   bypass=y
     ;;  
       -n|--dryrun)      dryrun=y
     ;;  
-      -b|--background)  background=y; chvt=y; bypass=y
+      -b|--background)  background=y chvt=y bypass=y
     ;;  
       -w|--slow)        slow=y
     ;;
@@ -201,7 +201,7 @@ parse_positional_params() {
     ;;
       -x|--extra)       extraLong=y
     ;;
-      -d|--dev)        deviceList=$(tr , ' ' <<<"$2"); shift
+      -d|--dev)         deviceList=$(tr , ' ' <<<"$2"); shift
     ;;
       -P|--prefix)      hostPrefix=$2; shift
     ;;
@@ -401,7 +401,7 @@ EOF
 #-------------------------------------------------------------------------------
 # EXECUTE COMMAND SCRIPT
 
-c_Sep=$CYAN ; c_Hostname=$GREEN ; c_Text=$orange
+c_Sep=$CYAN c_Hostname=$GREEN c_Text=$orange
 
 if [[ -n $remoteHosts ]]; then
   # If we have remote hosts, then let's run the command script on them
