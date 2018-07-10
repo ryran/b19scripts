@@ -1,5 +1,8 @@
-#!/bin/bash
-# Copyright 2015 Ryan Sawhill Aroha <rsaw@redhat.com>
+#!/usr/bin/env python2
+# -*- coding: utf-8 -*-
+#-------------------------------------------------------------------------------
+# Copyright 2018
+#  Ryan Sawhill Aroha <rsaw@redhat.com>
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -12,94 +15,373 @@
 #    General Public License <gnu.org/licenses/gpl.html> for more details.
 #-------------------------------------------------------------------------------
 
-if [[ ${1} == -h || ${1} == --help ]]; then
-    cat <<EOF
-Usage: ${0##*/} <ROUNDS>|--no-set-rounds
-Benchmark sha/bcrypt hashing by utilizing with the passwd command
+# Modules from standard library
+from __future__ import print_function
+import argparse
+import sys
+import subprocess
+import pwd
+import os
+import time
+import pty
+import select
+import re
+import atexit
+import signal
+import locale
 
-This script looks for a 'rounds_user' shell environment variable
-Set that first via 'export rounds_user=SomeUserName'
-If \$rounds_user is a valid user and we're running as root, the option
-    'rounds=<ROUNDS>' is set in /etc/pam.d/system-auth
-If '--no-set-rounds' is passed as the sole argument (instead of a number),
-    then no attempt to change system-wide settings (system-auth) will be made
-After that, the 'time' command is used to benchmark how long it takes to
-    reset the password for \$rounds_user with the 'passwd --stdin' command
-EOF
-    exit 0
-elif [[ ${EUID} -ne 0 ]]; then
-    printf "You must run this script as root\nSee --help\n"
-    exit 4
-elif [[ -z ${rounds_user} ]]; then
-    printf "You must run 'export rounds_user=USERNAME' first\nSee --help\n"
-    exit 3
-elif ! id ${rounds_user} >/dev/null; then
-    printf "You must run 'useradd ${rounds_user}' first\nSee --help\n"
-    exit 2
-elif [[ ${1} == --no-set-rounds ]]; then
-    num_rounds=
-elif [[ ${#} -eq 0 ]] || ! grep -qs '^[0-9]\+$' <<<"${1}"; then
-    printf "You must specify a single number arg (1000 - 9999999) or '--no-set-rounds'\nSee --help\n"
-    exit 1
-else
-    num_rounds=${1}
-fi
+locale.setlocale(locale.LC_ALL, '')
 
-if [[ -n ${num_rounds} ]]; then
-    printf "Setting system-wide 'rounds=${num_rounds}' in /etc/pam.d/system-auth ...\n"
-    sed --follow-symlinks -ri "/^password\s+sufficient\s+pam_unix.so/s, rounds=[0-9]+|$, rounds=${num_rounds},"  /etc/pam.d/system-auth
-    grep -EHn --color '^password\s+sufficient\s+pam_unix.so' /etc/pam.d/system-auth
-    printf "... Done.\n\n"
-else
-    printf "Skipping modification of rounds in system-auth\n"
-    printf "You should make relevant modifications manually before running ${0##*/}\n\n"
-fi
+# Set some globals
+prog = 'bench_cryptpass'
+versionNumber = '0.2.0'
+versionDate = '2018/07/10'
+description = "Benchmark libc hashing by utilizing the passwd command and su/ssh"
+description += "\nTested in RHEL6, RHEL7, and Fedora28"
+epilog = "{0} v{1} last mod {2}".format(prog, versionNumber, versionDate)
+epilog += "\nFor issues & questions, see: https://github.com/ryran/b19scripts/issues"
+defaultPasswd = 'St@nda7dsizePa55'
+verbosity = 0
+# hrline = lambda: print("-----------------------------------------------------------------------")
+hrline = lambda: print()
 
-[[ -n ${rounds_pass} ]] || rounds_pass="St@nda7dsizePa55"
 
-printf "Clearing user password of '${rounds_user}' ...\n"
-usermod -p '' ${rounds_user}
-printf "Timing password change (newpass: '${rounds_pass}') ...\n"
-time passwd --stdin "${rounds_user}" <<<"${rounds_pass}" &>/dev/null
-printf "\n"
+class CustomFormatter(argparse.RawDescriptionHelpFormatter):
+    """This custom formatter eliminates the duplicate metavar in help lines."""
+    def _format_action_invocation(self, action):
+        if not action.option_strings:
+            metavar, = self._metavar_formatter(action, action.dest)(1)
+            return metavar
+        else:
+            parts = []
+            if action.nargs == 0:
+                parts.extend(action.option_strings)
+            else:
+                default = action.dest.upper()
+                args_string = self._format_args(action, default)
+                for option_string in action.option_strings:
+                    parts.append('%s' % option_string)
+                parts[-1] += ' %s'%args_string
+            return ', '.join(parts)
 
-gawk -F$ -v user="${rounds_user}" '
-{
-if ($1 ~ user) {
-    hashtype = $2
-    if (hashtype == 1) {
-        printf "Hash type for user %s is MD5\n", user
-        printf "The rounds= setting does not affect MD5\n"
-        printf "Try: authconfig --passalgo=sha512 --update\n"
-        printf " Or: sed --follow-symlinks -ri /^password\\s+sufficient\\s+pam_unix.so/s,\\ md5,\\ sha512, /etc/pam.d/system-auth\n"
-        exit 9
-        }
-    else if (hashtype ~ /^2/) {
-        printf "Note that hash type for user %s is brypt\n", user
-        rounds = $3
-        hash = substr($4, 0, 5)"..."
-        shadowstr = $1 "$" $2 "$" $3 "$" hash
-        }
-    else if ($3 ~ /rounds=/) {
-        rounds = gensub(/rounds=(.*)/, "\\1", 1, $3)
-        hash = substr($4, 0, 5) "..."
-        shadowstr = $1 "$" $2 "$" $3 "$" hash
-        }
-    else {
+
+def parse_cmdline():
+    fmt = lambda prog: CustomFormatter(prog)
+    # Instantiate ArgumentParser
+    p = argparse.ArgumentParser(
+        prog=prog,
+        description=description,
+        add_help=False,
+        epilog=epilog,
+        formatter_class=fmt)
+    p.add_argument('user', metavar='USER', help="User with which to test su/ssh login")
+    p.add_argument('-r', '--rounds', type=int, help="Change /etc/pam.d/system-auth's password->pam_unix line in order to add/modify rounds=ROUNDS setting (number of sha-crypt rounds to pass to glibc crypt() when passwd creates a password, where glibc default is 5000); using this option means USER's password will be blown away and reset to the value of PASSWD (below); without this option, you'll simply be testing USER's current password")
+    p.add_argument('-p', '--password', metavar='PASSWD', help="Use standard passwd command to reset USER's password to PASSWD; as mentioned above, this option will be implicitly triggered if ROUNDS is specified (in which case, PASSWD defaults to '{0}')".format(defaultPasswd))
+    p.add_argument('-l', '--loops', type=int, default=1, help="Increase the number of times we attempt su and/or ssh (defaults to 1)")
+    p.add_argument('-s', '--success', action='store_true', dest='tryRealPasswd', help="Use the correct password when benchmarking with su/ssh; without this option, the password used for su/ssh will be the reverse of PASSWD, to better test how long attackers would need to wait; NOTE: use of this option without specifying '-p PASSWD' would be pointless, unless USER's password is the default PASSWD mentioned above")
+    g0 = p.add_mutually_exclusive_group()
+    g0.add_argument('--su', action='store_false', dest='testSsh', help="Limit benchmark testing to only su (no ssh)")
+    g0.add_argument('--ssh', action='store_false', dest='testSu', help="Limit benchmark testing to only ssh (no su)")
+    p.add_argument('-v', '--verbose', action='count', default=0, help="Use at least once to increase verbosity; 1: a little more detail; 2: print all commands before they're run")
+    p.add_argument('-h', '--help', action='help', help="Show this help message and exit")
+    opts =  p.parse_args()
+    global verbosity
+    verbosity = opts.verbose
+    if opts.rounds and not opts.password:
+        opts.password = defaultPasswd
+    return opts
+
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        print("= {0:06.3f} sec".format(te - ts))
+        return result
+    return timed
+
+
+def log_msg(msg):
+    if verbosity >= 1:
+        print(msg, file=sys.stderr)
+
+
+def log_cmd(cmd):
+    if verbosity >= 2:
+        s = ""
+        for i in cmd:
+            if i:
+                s += i
+            else:
+                s += "''"
+            s += " "
+        print("DEBUG executing: {0}".format(s.rstrip()), file=sys.stderr)
+
+
+def modify_system_auth(desiredRounds):
+    print("Setting system-wide 'rounds={0}' in /etc/pam.d/system-auth ...".format(desiredRounds))
+    cmd = [
+        'sed', '--follow-symlinks', '-ri',
+        '/^password\s+sufficient\s+pam_unix.so/s, rounds=[0-9]+|$, rounds={0},'.format(desiredRounds),
+        '/etc/pam.d/system-auth',
+        ]
+    log_cmd(cmd)
+    subprocess.check_call(cmd)
+
+
+def set_passwd(user, passphrase):
+    @timeit
+    def passwd(cmd):
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        s1, s2 = p.communicate(input=passphrase)
+        if p.returncode == 0:
+            return True
+        print(s2)
+    
+    print("Timing password change (new password: '{0}') ...".format(passphrase))
+    cmd = ['passwd', '--stdin', user]
+    log_cmd(cmd)
+    
+    if not passwd(cmd):
+        print("Aborting due to error running passwd")
+        sys.exit(2)
+
+
+def check_shadow(user):
+    if verbosity >= 2:
+        print("DEBUG: searching /etc/shadow for user {0}".format(user), file=sys.stderr)
+    
+    with open('/etc/shadow') as f:
+        for line in f:
+            line = line.split(':')
+            if line[0] == user:
+                break
+        else:
+            print("Aborting due to unexpected error: can't find user {0} in /etc/shadow".format(user))
+            sys.exit(3)
+    
+    if not line[1] or len(line[1].split('$')) == 1:
+        print("From /etc/shadow: {0}:{1}:...".format(user, line[1]))
+        print("Aborting because user has no password; see help page & use -p/--password option")
+        sys.exit(1)
+    
+    cryptString = line[1].split('$')
+    hashType = cryptString[1]
+    
+    if hashType == '1':
+        print("Hash type for user {0} is MD5".format(user))
+        print("The 'rounds=' setting does not affect MD5")
+        print("Try: authconfig --passalgo=sha512 --update")
+        print(" Or: sed --follow-symlinks -ri /^password\\s+sufficient\\s+pam_unix.so/s,\\ md5,\\ sha512, /etc/pam.d/system-auth")
+        sys.exit(2)
+    elif hashType.startswith('2'):
+        print("Note that hash type for user {0} is bcrypt".format(user))
+        rounds = cryptString[2]
+        passHash = cryptString[3][:9]
+        printString = "{0}:{1}${2}${3}${4}...".format(user, cryptString[0], hashType, rounds, passHash)
+    elif 'rounds=' in cryptString[2]:
+        rounds = cryptString[2].split('=')[1]
+        passHash = cryptString[3][:9]
+        printString = "{0}:{1}${2}$rounds={3}${4}...".format(user, cryptString[0], hashType, rounds, passHash)
+    else:
         rounds = 5000
-        hash = substr($3, 0, 5) "..."
-        shadowstr = $1 "$" $2 "$" hash
-        }
-    printf "From /etc/shadow: %s  (%'"'"'d)\n\n", shadowstr, rounds
-    }
-}' /etc/shadow || exit
+        passHash = cryptString[2][:9]
+        printString = "{0}:{1}${2}$rounds={3}${4}...".format(user, cryptString[0], hashType, rounds, passHash)
+    
+    rounds = locale.format('%d', int(rounds), grouping=True)
+    print("From /etc/shadow: {0}  ({1})".format(printString, rounds))
+    
+    if cryptString[0].startswith('!'):
+        print("Aborting because user's password is locked; see help page & use -p/--password option")
+        sys.exit(1)
 
-if command -v sshpass >/dev/null; then
-    export SSHPASS=${rounds_pass}
-    printf "Timing ssh into localhost (using sshpass command) ...\n"
-    printf "This will fail if ssh is not listening on the default port\n"
-    time sshpass -e ssh ${rounds_user}@localhost x=
-else
-    printf "If you install the 'sshpass' command (Fedora/EPEL: sshpass) this script will\nalso time ssh login as ${rounds_user}@localhost for you\n"
-fi
-printf -- "-----------------------------------------------------------------------\n\n"
+
+def wait_for(fd, opts):
+    READ_ONLY = select.POLLIN | select.POLLPRI | select.POLLHUP | select.POLLERR
+    poller = select.poll()
+    poller.register(fd, READ_ONLY)
+    while True:
+        events = poller.poll()
+        for fd, flag in events:
+            if flag & (select.POLLIN | select.POLLPRI):
+                out = os.read(fd, 1024)
+                o = out.strip()
+                if not o or 'Permanently added' in o:
+                    continue
+                elif 'Authentication failure' in out or 'incorrect password' in out or 'Permission denied' in out:
+                    if opts.tryRealPasswd:
+                        print("  !! OUTPUT: {0}".format(o), file=sys.stderr)
+                    return False
+                elif 'assword: ' in out:
+                    return True
+                elif 'authentication succeeded' in out:
+                    log_msg("  ++ OUTPUT: {0}".format(o))
+                    return True
+                else:
+                    print("  ?? OUTPUT: {0}".format(o), file=sys.stderr)
+            elif flag & select.POLLHUP:
+                print("  ?? HUP?", file=sys.stderr)
+                return False
+            elif flag & select.POLLERR:
+                print("  ?? ERR?", file=sys.stderr)
+                return False
+
+
+def pty_exec(cmd, opts):
+    log_cmd(cmd)
+    ts = time.time()
+    pid, fd = pty.fork()
+    
+    # child
+    if pid == 0:
+        # u = pwd.getpwnam(opts.user)
+        # os.setgid(u.pw_gid)
+        # os.setuid(u.pw_uid)
+        os.execvp(cmd[0], cmd)
+    
+    # parent
+    elif pid > 0:
+        
+        def fin():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            te = time.time()
+            elapsed = te - ts
+            print("= {0:06.3f} sec".format(elapsed))
+            return elapsed
+        
+        log_msg(". Polling for prompt")
+        if not wait_for(fd, opts):
+            return fin()
+        
+        if opts.tryRealPasswd:
+            p = opts.password
+            msg = "correct password"
+        else:
+            p = opts.password[::-1]
+            msg = "incorrect password ('{0}')".format(p)
+        
+        log_msg(". Entering {0}".format(msg))
+        os.write(fd, p + '\n')
+        
+        log_msg(". Polling for result")
+        if not wait_for(fd, opts):
+            return fin()
+        
+        os.wait()
+        return fin()
+
+
+def cleanup_pamfix():
+    cmd = [
+        'sed',
+        '--follow-symlinks',
+        '-ri',
+        '/^#.*pam_(xauth|rootok)/s|^#||',
+        '/etc/pam.d/su',
+        ]
+    log_cmd(cmd)
+    subprocess.call(cmd)
+
+
+def fix_pam():
+    # pam_xauth.so can cause slowdowns, so we disable
+    # disabling pam_rootok.so allows root to do su without having to demote first
+    atexit.register(cleanup_pamfix)
+    cmd = [
+        'sed',
+        '--follow-symlinks',
+        '-ri',
+        '/^[^#].*pam_(xauth|rootok)/s|^|#|',
+        '/etc/pam.d/su',
+        ]
+    log_cmd(cmd)
+    subprocess.call(cmd)
+
+
+def run_cmd(cmd, opts):
+    allElapsed = []
+    for i in range(opts.loops):
+        elapsed = pty_exec(cmd, opts)
+        allElapsed.append(elapsed)
+    if opts.loops > 1:
+        avg = sum(allElapsed) / opts.loops
+        print("============= AVERAGE out of {0}".format(opts.loops))
+        print("= {0:06.3f} sec".format(avg))
+
+
+def test_su(opts):
+    fix_pam()
+    cmd = [
+        'su', opts.user,
+        '-c', 'echo authentication succeeded'
+        ]
+    print("Timing su to user {0} ...".format(opts.user))
+    run_cmd(cmd, opts)
+
+
+def test_ssh(opts):
+    cmd = [
+        'ssh',
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'UserKnownHostsFile=/dev/null',
+        '-l', opts.user,
+        'localhost',
+        'echo authentication succeeded',
+        ]
+    print("Timing ssh into localhost as user {0} ...".format(opts.user))
+    run_cmd(cmd, opts)
+
+
+def main():
+    opts = parse_cmdline()
+    
+    if os.geteuid() != 0:
+        print("You must run this script as root\nSee --help")
+        sys.exit(1)
+    
+    try:
+        pwd.getpwnam(opts.user)
+    except KeyError:
+        print("Specified user '{0}' does not exist".format(opts.user))
+        print("Create the user first (e.g., with useradd)")
+        sys.exit(1)
+    
+    hrline()
+    
+    if opts.rounds:
+        modify_system_auth(opts.rounds)
+        hrline()
+    
+    if opts.password:
+        print("Clearing password of user {0} with usermod ...".format(opts.user))
+        cmd = ['usermod', '-p', '', opts.user]
+        log_cmd(cmd)
+        subprocess.check_call(cmd)
+        set_passwd(opts.user, opts.password)
+        hrline()
+    else:
+        # Now that we have the above out of the way...
+        # we can set opts.password to default
+        opts.password = defaultPasswd
+    
+    check_shadow(opts.user)
+    hrline()
+    
+    if opts.testSu:
+        test_su(opts)
+        hrline()
+    
+    if opts.testSsh:
+        test_ssh(opts)
+        hrline()
+
+
+if __name__ == '__main__':
+    # Make ctrl-c trigger standard exit
+    signal.signal(signal.SIGINT, lambda a, b: sys.exit("\nCaught SIGINT/KeyboardInterrupt; doing graceful exit"))
+    # Make sigterm do a standard exit so atexit handlers get run
+    signal.signal(signal.SIGTERM, lambda a, b: sys.exit("\n'Caught SIGTERM; doing graceful exit"))
+    main()
